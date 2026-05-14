@@ -1,2 +1,8 @@
 [phases.setup]
-nixPkgs = ["postgresql"]
+nixPkgs = ["python311", "libpq"]
+
+[phases.install]
+cmds = ["pip install -r requirements.txt"]
+
+[start]
+cmd = "flask --app wsgi.py db upgrade && python seed.py && gunicorn wsgi:app"
