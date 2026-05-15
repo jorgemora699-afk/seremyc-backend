@@ -3,7 +3,7 @@ from flask_jwt_extended import jwt_required
 from infrastructure.database.db import db
 from infrastructure.database.models import BeforeAfterPhotoModel
 
-photo_bp = Blueprint('photos', __name__)
+photo_bp = Blueprint('photo_bp', __name__)
 
 
 def serialize_photo(photo):
