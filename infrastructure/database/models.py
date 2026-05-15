@@ -121,8 +121,8 @@ class BeforeAfterPhotoModel(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     client_id = db.Column(db.Integer, db.ForeignKey('clients.id'), nullable=False)
-    before_url = db.Column(db.String(255))
-    after_url = db.Column(db.String(255))
+    before_url = db.Column(db.Text)
+    after_url = db.Column(db.Text)
     treatment = db.Column(db.String(150))
     notes = db.Column(db.Text)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
