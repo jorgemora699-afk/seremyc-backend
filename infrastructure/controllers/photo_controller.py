@@ -18,7 +18,7 @@ def serialize_photo(photo):
     }
 
 
-@photo_bp.route('/client/<int:client_id>', methods=['GET'])
+@photo_bp.route('/by-client/<int:client_id>', methods=['GET'])
 @jwt_required()
 def get_photos(client_id):
     try:
