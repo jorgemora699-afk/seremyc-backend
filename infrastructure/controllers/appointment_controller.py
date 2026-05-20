@@ -1,9 +1,13 @@
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required
-from datetime import datetime
+from datetime import datetime, timedelta
 from application.use_cases.appointments.create_appointment_use_case import CreateAppointmentUseCase
 from application.use_cases.appointments.update_appointment_use_case import UpdateAppointmentUseCase
 from application.use_cases.appointments.get_appointments_use_case import GetAppointmentsUseCase
+from infrastructure.repositories.service_repository import ServiceRepository
+from infrastructure.repositories.appointment_repository import AppointmentRepository
+from infrastructure.database.models import AppointmentModel
+from infrastructure.database.db import db
 
 appointment_bp = Blueprint('appointments', __name__)
 
@@ -44,19 +48,6 @@ def get_appointments():
         return jsonify({'error': 'Error interno del servidor'}), 500
 
 
-@appointment_bp.route('/<int:appointment_id>', methods=['GET'])
-@jwt_required()
-def get_appointment(appointment_id):
-    try:
-        use_case = GetAppointmentsUseCase()
-        appointment = use_case.execute_by_id(appointment_id)
-        return jsonify(serialize_appointment(appointment)), 200
-    except ValueError as e:
-        return jsonify({'error': str(e)}), 404
-    except Exception as e:
-        return jsonify({'error': 'Error interno del servidor'}), 500
-
-
 @appointment_bp.route('/', methods=['POST'])
 @jwt_required()
 def create_appointment():
@@ -78,42 +69,7 @@ def create_appointment():
         return jsonify({'error': 'Error interno del servidor'}), 500
 
 
-@appointment_bp.route('/<int:appointment_id>', methods=['PUT'])
-@jwt_required()
-def update_appointment(appointment_id):
-    try:
-        data = request.get_json()
-
-        if data.get('scheduled_at'):
-            data['scheduled_at'] = datetime.fromisoformat(data['scheduled_at'])
-
-        use_case = UpdateAppointmentUseCase()
-        appointment = use_case.execute(appointment_id, data)
-        return jsonify(serialize_appointment(appointment)), 200
-
-    except ValueError as e:
-        return jsonify({'error': str(e)}), 400
-    except Exception as e:
-        return jsonify({'error': 'Error interno del servidor'}), 500
-
-
-@appointment_bp.route('/<int:appointment_id>', methods=['DELETE'])
-@jwt_required()
-def delete_appointment(appointment_id):
-    try:
-        from app.infrastructure.repositories.appointment_repository import AppointmentRepository
-        repo = AppointmentRepository()
-        appointment = repo.find_by_id(appointment_id)
-
-        if not appointment:
-            return jsonify({'error': 'Cita no encontrada'}), 404
-
-        repo.delete(appointment)
-        return jsonify({'message': 'Cita eliminada exitosamente'}), 200
-
-    except Exception as e:
-        return jsonify({'error': 'Error interno del servidor'}), 500
-    
+# ✅ ANTES de /<int:appointment_id>
 @appointment_bp.route('/availability', methods=['GET'])
 @jwt_required()
 def check_availability():
@@ -124,23 +80,17 @@ def check_availability():
         if not date_str or not service_id:
             return jsonify({'error': 'Fecha y servicio son requeridos'}), 400
 
-        from infrastructure.repositories.service_repository import ServiceRepository
-        from infrastructure.database.models import AppointmentModel
-        from datetime import datetime, timedelta
-
         service = ServiceRepository().find_by_id(int(service_id))
         if not service:
             return jsonify({'error': 'Servicio no encontrado'}), 404
 
         target_date = datetime.strptime(date_str, '%Y-%m-%d')
 
-        # Citas del día
         existing = AppointmentModel.query.filter(
             db.func.date(AppointmentModel.scheduled_at) == target_date.date(),
             AppointmentModel.status.notin_(['cancelled', 'no_show'])
         ).order_by(AppointmentModel.scheduled_at).all()
 
-        # Generar slots disponibles 8am - 7pm cada 30 min
         slots = []
         current = target_date.replace(hour=8, minute=0, second=0)
         end_of_day = target_date.replace(hour=19, minute=0, second=0)
@@ -168,6 +118,55 @@ def check_availability():
             'duration': service.duration,
             'slots': slots
         }), 200
+
+    except Exception as e:
+        return jsonify({'error': 'Error interno del servidor'}), 500
+
+
+@appointment_bp.route('/<int:appointment_id>', methods=['GET'])
+@jwt_required()
+def get_appointment(appointment_id):
+    try:
+        use_case = GetAppointmentsUseCase()
+        appointment = use_case.execute_by_id(appointment_id)
+        return jsonify(serialize_appointment(appointment)), 200
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 404
+    except Exception as e:
+        return jsonify({'error': 'Error interno del servidor'}), 500
+
+
+@appointment_bp.route('/<int:appointment_id>', methods=['PUT'])
+@jwt_required()
+def update_appointment(appointment_id):
+    try:
+        data = request.get_json()
+
+        if data.get('scheduled_at'):
+            data['scheduled_at'] = datetime.fromisoformat(data['scheduled_at'])
+
+        use_case = UpdateAppointmentUseCase()
+        appointment = use_case.execute(appointment_id, data)
+        return jsonify(serialize_appointment(appointment)), 200
+
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        return jsonify({'error': 'Error interno del servidor'}), 500
+
+
+@appointment_bp.route('/<int:appointment_id>', methods=['DELETE'])
+@jwt_required()
+def delete_appointment(appointment_id):
+    try:
+        repo = AppointmentRepository()
+        appointment = repo.find_by_id(appointment_id)
+
+        if not appointment:
+            return jsonify({'error': 'Cita no encontrada'}), 404
+
+        repo.delete(appointment)
+        return jsonify({'message': 'Cita eliminada exitosamente'}), 200
 
     except Exception as e:
         return jsonify({'error': 'Error interno del servidor'}), 500
