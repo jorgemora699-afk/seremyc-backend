@@ -1,6 +1,7 @@
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required
 from datetime import datetime
+from infrastructure.database.db import db
 from application.use_cases.appointments.create_appointment_use_case import CreateAppointmentUseCase
 from application.use_cases.appointments.update_appointment_use_case import UpdateAppointmentUseCase
 from application.use_cases.appointments.get_appointments_use_case import GetAppointmentsUseCase
