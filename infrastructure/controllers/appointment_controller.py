@@ -14,6 +14,7 @@ def serialize_appointment(appointment):
         'id': appointment.id,
         'client_id': appointment.client_id,
         'client_name': appointment.client.full_name if appointment.client else None,
+        'client_phone': appointment.client.whatsapp or appointment.client.phone if appointment.client else None,
         'service_id': appointment.service_id,
         'service_name': appointment.service.name if appointment.service else None,
         'service_price': float(appointment.service.price) if appointment.service else None,
@@ -21,6 +22,8 @@ def serialize_appointment(appointment):
         'duration': appointment.duration,
         'status': appointment.status,
         'observations': appointment.observations,
+        'discount_applied': float(appointment.discount_applied) if appointment.discount_applied else 0,
+        'final_price': float(appointment.final_price) if appointment.final_price else None,
         'created_at': appointment.created_at.isoformat() if appointment.created_at else None
     }
 
