@@ -142,16 +142,18 @@ def check_availability():
 
         # Generar slots disponibles 8am - 7pm cada 30 min
         slots = []
-        current = target_date.replace(hour=8, minute=0, second=0)
-        end_of_day = target_date.replace(hour=19, minute=0, second=0)
+        current = target_date.replace(hour=8, minute=0, second=0, microsecond=0)
+        end_of_day = target_date.replace(hour=19, minute=0, second=0, microsecond=0)
 
         while current + timedelta(minutes=service.duration) <= end_of_day:
             slot_end = current + timedelta(minutes=service.duration)
             is_available = True
 
             for apt in existing:
-                apt_end = apt.scheduled_at + timedelta(minutes=apt.duration)
-                if current < apt_end and slot_end > apt.scheduled_at:
+                apt_start = apt.scheduled_at
+                apt_end = apt_start + timedelta(minutes=apt.duration)
+                # Verificar solapamiento
+                if current < apt_end and slot_end > apt_start:
                     is_available = False
                     break
 
@@ -170,4 +172,5 @@ def check_availability():
         }), 200
 
     except Exception as e:
-        return jsonify({'error': 'Error interno del servidor'}), 500
+        print(f'Error availability: {str(e)}')
+        return jsonify({'error': str(e)}), 500
