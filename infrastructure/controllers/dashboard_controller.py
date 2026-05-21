@@ -30,7 +30,7 @@ def get_dashboard():
         upcoming = AppointmentModel.query.filter(
             AppointmentModel.scheduled_at >= now,
             AppointmentModel.status.in_(['pending', 'confirmed'])
-        ).order_by(AppointmentModel.scheduled_at).limit(5).all()
+        ).order_by(AppointmentModel.scheduled_at).limit(10).all()
 
         # ─── Finanzas del día ───────────────────────────────────────
         today_finances = FinanceModel.query.filter_by(date=today).all()
