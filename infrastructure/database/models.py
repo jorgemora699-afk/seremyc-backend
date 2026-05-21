@@ -62,6 +62,9 @@ class AppointmentModel(db.Model):
     promotion_id = db.Column(db.Integer, db.ForeignKey('promotions.id'), nullable=True)
     discount_applied = db.Column(db.Numeric(10, 2), default=0)
     final_price = db.Column(db.Numeric(10, 2), nullable=True)
+    is_paid = db.Column(db.Boolean, default=False)
+    payment_method = db.Column(db.String(20), nullable=True)  # cash, transfer
+    receipt_url = db.Column(db.Text, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     payment = db.relationship('FinanceModel', backref='appointment', lazy=True)
