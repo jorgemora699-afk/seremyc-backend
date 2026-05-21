@@ -20,6 +20,14 @@ class UpdateAppointmentUseCase:
         if 'status' in data and data['status'] not in VALID_STATUSES:
             raise ValueError('Estado inválido')
 
+        # Si se cancela la cita — borrar ingreso asociado
+        if data.get('status') == 'cancelled' and appointment.status != 'cancelled':
+            self._delete_associated_income(appointment_id)
+            # Si estaba pagada, marcar como no pagada
+            appointment.is_paid = False
+            appointment.payment_method = None
+            appointment.receipt_url = None
+
         # Reagendamiento — validar nuevo horario
         if 'scheduled_at' in data and data['scheduled_at'] != appointment.scheduled_at:
             self._validate_availability(
@@ -28,9 +36,8 @@ class UpdateAppointmentUseCase:
                 exclude_id=appointment_id
             )
 
-        # Si se finaliza la cita — descontar stock automáticamente
+        # Si se finaliza la cita — registrar pago automáticamente
         if data.get('status') == 'finished' and appointment.status != 'finished':
-            self._discount_stock(appointment)
             self._register_payment(appointment)
 
         appointment.scheduled_at = data.get('scheduled_at', appointment.scheduled_at)
@@ -38,6 +45,14 @@ class UpdateAppointmentUseCase:
         appointment.observations = data.get('observations', appointment.observations)
 
         return self.appointment_repository.update(appointment)
+
+    def _delete_associated_income(self, appointment_id: int):
+        from infrastructure.database.models import FinanceModel
+        from infrastructure.database.db import db
+        finance = FinanceModel.query.filter_by(appointment_id=appointment_id).first()
+        if finance:
+            db.session.delete(finance)
+            db.session.commit()
 
     def _validate_availability(self, scheduled_at: datetime, duration: int, exclude_id: int = None):
         end_time = scheduled_at + timedelta(minutes=duration)
@@ -69,8 +84,6 @@ class UpdateAppointmentUseCase:
         service = appointment.service
         if not service:
             return
-        # Aquí puedes agregar lógica de descuento por servicio
-        # cuando implementes la relación servicio-producto
 
     def _register_payment(self, appointment):
         from infrastructure.database.models import FinanceModel
