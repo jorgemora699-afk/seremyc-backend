@@ -24,6 +24,9 @@ def serialize_appointment(appointment):
         'observations': appointment.observations,
         'discount_applied': float(appointment.discount_applied) if appointment.discount_applied else 0,
         'final_price': float(appointment.final_price) if appointment.final_price else None,
+        'is_paid': appointment.is_paid,
+        'payment_method': appointment.payment_method,
+        'receipt_url': appointment.receipt_url,
         'created_at': appointment.created_at.isoformat() if appointment.created_at else None
     }
 
@@ -105,7 +108,7 @@ def update_appointment(appointment_id):
 @jwt_required()
 def delete_appointment(appointment_id):
     try:
-        from app.infrastructure.repositories.appointment_repository import AppointmentRepository
+        from infrastructure.repositories.appointment_repository import AppointmentRepository
         repo = AppointmentRepository()
         appointment = repo.find_by_id(appointment_id)
 
@@ -117,6 +120,45 @@ def delete_appointment(appointment_id):
 
     except Exception as e:
         return jsonify({'error': 'Error interno del servidor'}), 500
+    
+@appointment_bp.route('/<int:appointment_id>/payment', methods=['POST'])
+@jwt_required()
+def register_payment(appointment_id):
+    try:
+        data = request.get_json()
+        from infrastructure.repositories.appointment_repository import AppointmentRepository
+        repo = AppointmentRepository()
+        appointment = repo.find_by_id(appointment_id)
+
+        if not appointment:
+            return jsonify({'error': 'Cita no encontrada'}), 404
+
+        appointment.is_paid = True
+        appointment.payment_method = data.get('payment_method')
+        appointment.receipt_url = data.get('receipt_url')
+
+        # Registrar en finanzas automáticamente
+        from infrastructure.database.models import FinanceModel
+        from datetime import date
+
+        existing = FinanceModel.query.filter_by(appointment_id=appointment_id).first()
+        if not existing:
+            price = float(appointment.final_price) if appointment.final_price else float(appointment.service.price)
+            finance = FinanceModel(
+                type='income',
+                category='servicios',
+                amount=price,
+                description=f'Pago {data.get("payment_method", "")} - {appointment.service.name if appointment.service else ""}',
+                date=date.today(),
+                appointment_id=appointment_id
+            )
+            db.session.add(finance)
+
+        db.session.commit()
+        return jsonify(serialize_appointment(appointment)), 200
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
     
 @appointment_bp.route('/availability', methods=['GET'])
 @jwt_required()
