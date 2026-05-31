@@ -350,7 +350,9 @@ def get_client_history():
                 'service':      a.service.name if a.service else None,
                 'service_id':   a.service_id,
                 'scheduled_at': a.scheduled_at.isoformat(),
-                'status':       a.status
+                'status':       a.status,
+                'survey_sent':  a.survey_sent,       
+                'survey_rating': a.survey_rating
             }
             for a in appointments
         ]
@@ -366,6 +368,22 @@ def cancel_appointment(appointment_id):
     appointment.status = 'cancelled'
     db.session.commit()
     return jsonify({'message': 'Cita cancelada'}), 200
+
+
+@agent_bp.route('/appointments/<int:appointment_id>/survey', methods=['PATCH'])
+@require_agent_key
+def save_survey(appointment_id):
+    data = request.get_json()
+    appointment = AppointmentModel.query.get(appointment_id)
+
+    if not appointment:
+        return jsonify({'error': 'Cita no encontrada'}), 404
+
+    appointment.survey_rating  = data.get('rating')
+    appointment.survey_comment = data.get('comment')
+    db.session.commit()
+
+    return jsonify({'message': 'Encuesta guardada'}), 200
 
 # ─────────────────────────────────────────
 # HELPER

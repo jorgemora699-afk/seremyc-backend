@@ -69,6 +69,9 @@ class AppointmentModel(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     created_by = db.Column(db.String(20), default='user')
     reminder_sent = db.Column(db.Boolean, default=False)
+    survey_sent    = db.Column(db.Boolean, default=False)
+    survey_rating  = db.Column(db.Integer, nullable=True)
+    survey_comment = db.Column(db.Text, nullable=True)
 
     payment = db.relationship('FinanceModel', backref='appointment', lazy=True)
     promotion = db.relationship('PromotionModel', backref='appointments', lazy=True)

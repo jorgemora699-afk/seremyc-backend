@@ -328,6 +328,60 @@ def _manejar_confirmacion_cita(numero: str, accion: str) -> str:
     except Exception as e:
         logger.error(f"Error manejando acción {accion}: {e}")
         return "Lo siento, ocurrió un error. Por favor contáctanos directamente. 😔"
+    
+def _guardar_calificacion(numero: str, calificacion: int) -> str | None:
+    try:
+        phone = _normalizar_numero(numero)
+
+        r = requests.get(
+            f'{_base_url()}/api/agent/client-history',
+            params={'phone': phone},
+            headers=_obtener_headers(),
+            timeout=5
+        )
+        data = r.json()
+
+        if not data.get('exists'):
+            return None
+
+        # Buscar la cita más reciente con encuesta enviada
+        citas = data.get('appointments', [])
+        cita_encuesta = next(
+            (c for c in citas if c.get('survey_sent') and not c.get('survey_rating')),
+            None
+        )
+
+        if not cita_encuesta:
+            return None  # No hay encuesta pendiente, el número es otra cosa
+
+        # Guardar calificación
+        requests.patch(
+            f'{_base_url()}/api/agent/appointments/{cita_encuesta["id"]}/survey',
+            json={'rating': calificacion},
+            headers=_obtener_headers(),
+            timeout=10
+        )
+
+        nombre = data['full_name'].split()[0]
+
+        if calificacion >= 4:
+            return (
+                f"¡Muchas gracias {nombre}! 🌟 Nos alegra mucho que hayas tenido una "
+                f"gran experiencia.\n\n"
+                f"¿Quieres dejarnos algún comentario adicional? 😊\n"
+                f"(O escribe *NO* si no deseas agregar nada)"
+            )
+        else:
+            return (
+                f"Gracias {nombre} por tu honestidad. 🙏\n\n"
+                f"Lamentamos que tu experiencia no haya sido la mejor. "
+                f"¿Nos puedes contar qué podríamos mejorar? 😔"
+            )
+
+    except Exception as e:
+        logger.error(f"Error guardando calificación: {e}")
+        return None
+    
 # ─────────────────────────────────────────
 # Procesar mensaje entrante
 # ─────────────────────────────────────────
@@ -338,6 +392,12 @@ def procesar_mensaje(numero: str, mensaje: str) -> str:
     # Detectar confirmación o cancelación de cita
     if mensaje_lower in ['confirmar', 'cancelar', 'reagendar']:
         return _manejar_confirmacion_cita(numero, mensaje_lower)
+    
+    # Detectar calificación de encuesta (1-5)
+    if mensaje_lower in ['1', '2', '3', '4', '5']:
+        resultado = _guardar_calificacion(numero, int(mensaje_lower))
+        if resultado:
+            return resultado
 
     es_primer_mensaje = numero not in conversaciones
 
@@ -413,6 +473,7 @@ def procesar_mensaje(numero: str, mensaje: str) -> str:
         resultado = _agendar_cita(numero, texto_respuesta.strip())
         conversaciones[numero][-1]['content'] = resultado
         return resultado
+    
 
     return texto_respuesta
 

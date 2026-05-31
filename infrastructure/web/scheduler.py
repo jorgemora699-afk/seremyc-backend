@@ -70,13 +70,66 @@ def enviar_recordatorios():
             logger.error(f"Error en enviar_recordatorios: {e}")
 
 
-# ─────────────────────────────────────────
-# Inicializar scheduler
-# ─────────────────────────────────────────
+def enviar_encuestas():
+    from infrastructure.database.models import AppointmentModel
+    from infrastructure.database.db import db
+    from infrastructure.web.flask_app import create_app
+
+    app = create_app()
+
+    with app.app_context():
+        try:
+            ahora = datetime.now()
+            # Citas que terminaron hace 2 horas
+            hace_dos_horas = ahora - timedelta(hours=2)
+            hace_tres_horas = ahora - timedelta(hours=3)
+
+            citas = AppointmentModel.query.filter(
+                AppointmentModel.scheduled_at >= hace_tres_horas,
+                AppointmentModel.scheduled_at <= hace_dos_horas,
+                AppointmentModel.status == 'confirmed',
+                AppointmentModel.survey_sent == False
+            ).all()
+
+            logger.info(f"Encuestas: {len(citas)} citas para encuestar")
+
+            for cita in citas:
+                cliente = cita.client
+                servicio = cita.service
+
+                if not cliente or not (cliente.phone or cliente.whatsapp):
+                    continue
+
+                telefono = cliente.whatsapp or cliente.phone
+                nombre = cliente.full_name.split()[0]
+
+                mensaje = (
+                    f"¡Hola {nombre}! 🌸 Esperamos que hayas disfrutado tu sesión de "
+                    f"*{servicio.name if servicio else 'nuestro servicio'}* hoy.\n\n"
+                    f"¿Nos regalas un minuto? 😊\n\n"
+                    f"¿Cómo calificarías tu experiencia en Seremyc Sthetic?\n\n"
+                    f"⭐ 1 - Muy mala\n"
+                    f"⭐⭐ 2 - Mala\n"
+                    f"⭐⭐⭐ 3 - Regular\n"
+                    f"⭐⭐⭐⭐ 4 - Buena\n"
+                    f"⭐⭐⭐⭐⭐ 5 - Excelente\n\n"
+                    f"Responde con un número del 1 al 5. 💜"
+                )
+
+                enviado = enviar_mensaje(telefono, mensaje)
+
+                if enviado:
+                    cita.survey_sent = True
+                    db.session.commit()
+                    logger.info(f"Encuesta enviada a {telefono} — cita {cita.id}")
+
+        except Exception as e:
+            logger.error(f"Error en enviar_encuestas: {e}")
+
+
 def init_scheduler():
     scheduler = BackgroundScheduler(timezone='America/Bogota')
 
-    # Ejecutar cada hora
     scheduler.add_job(
         enviar_recordatorios,
         'interval',
@@ -85,6 +138,14 @@ def init_scheduler():
         replace_existing=True
     )
 
+    scheduler.add_job(
+        enviar_encuestas,
+        'interval',
+        minutes=30,      # Revisar cada 30 minutos
+        id='encuestas',
+        replace_existing=True
+    )
+
     scheduler.start()
-    logger.info("Scheduler iniciado — recordatorios activos")
+    logger.info("Scheduler iniciado — recordatorios y encuestas activos")
     return scheduler
