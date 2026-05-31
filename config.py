@@ -1,5 +1,6 @@
 import os
 from dotenv import load_dotenv
+from datetime import timedelta
 
 load_dotenv()
 
@@ -8,10 +9,14 @@ class Config:
     SQLALCHEMY_DATABASE_URI = os.getenv('DATABASE_URL')
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     JWT_SECRET_KEY = os.getenv('JWT_SECRET_KEY', 'seremyc-jwt-secret')
-    JWT_ACCESS_TOKEN_EXPIRES = 86400  # 24 horas
+    JWT_ACCESS_TOKEN_EXPIRES = timedelta(days=30)  
     MAX_CONTENT_LENGTH = 16 * 1024 * 1024  # 16MB para imágenes
     ALLOWED_EMAILS = [
         email.strip()
         for email in os.getenv('ALLOWED_EMAILS', '').split(',')
         if email.strip()
     ]
+    SQLALCHEMY_ENGINE_OPTIONS = {
+        'pool_pre_ping': True,
+        'pool_recycle': 300,
+    }

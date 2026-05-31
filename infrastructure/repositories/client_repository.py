@@ -9,6 +9,7 @@ class ClientRepository:
 
     def find_by_id(self, client_id: int) -> ClientModel | None:
         return ClientModel.query.filter_by(id=client_id, is_active=True).first()
+    
 
     def search(self, query: str) -> list:
         return ClientModel.query.filter(

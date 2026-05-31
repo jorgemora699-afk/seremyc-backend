@@ -12,6 +12,7 @@ class ServiceRepository:
 
     def find_by_category(self, category: str) -> list:
         return ServiceModel.query.filter_by(category=category, is_active=True).all()
+    
 
     def search(self, query: str) -> list:
         return ServiceModel.query.filter(

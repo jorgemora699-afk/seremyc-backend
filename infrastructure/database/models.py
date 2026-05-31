@@ -28,6 +28,7 @@ class ClientModel(db.Model):
     observations = db.Column(db.Text)
     is_active = db.Column(db.Boolean, default=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    source = db.Column(db.String(20), default='manual')
 
     appointments = db.relationship('AppointmentModel', backref='client', lazy=True)
     photos = db.relationship('BeforeAfterPhotoModel', backref='client', lazy=True)
@@ -66,6 +67,7 @@ class AppointmentModel(db.Model):
     payment_method = db.Column(db.String(20), nullable=True)  # cash, transfer
     receipt_url = db.Column(db.Text, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_by = db.Column(db.String(20), default='user')
 
     payment = db.relationship('FinanceModel', backref='appointment', lazy=True)
     promotion = db.relationship('PromotionModel', backref='appointments', lazy=True)
@@ -129,3 +131,4 @@ class BeforeAfterPhotoModel(db.Model):
     treatment = db.Column(db.String(150))
     notes = db.Column(db.Text)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+

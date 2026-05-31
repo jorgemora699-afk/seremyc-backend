@@ -1,6 +1,7 @@
 from flask import Blueprint, request, jsonify
 from application.use_cases.auth.login_use_case import LoginUseCase
 from application.use_cases.auth.register_use_case import RegisterUseCase
+from flask_jwt_extended import jwt_required, get_jwt_identity
 
 auth_bp = Blueprint('auth', __name__)
 
@@ -22,6 +23,12 @@ def login():
         return jsonify({'error': str(e)}), 401
     except Exception as e:
         return jsonify({'error': 'Error interno del servidor'}), 500
+
+@auth_bp.route('/verify', methods=['GET'])
+@jwt_required()
+def verify():
+    current_user = get_jwt_identity()
+    return jsonify({'valid': True, 'user': current_user}), 200
 
 
 @auth_bp.route('/register', methods=['POST'])
