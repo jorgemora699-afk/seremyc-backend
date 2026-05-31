@@ -4,6 +4,7 @@ from flask_jwt_extended import JWTManager
 
 from infrastructure.database.db import db, migrate
 from config import Config
+from infrastructure.web.scheduler import init_scheduler
 
 
 def create_app():
@@ -19,6 +20,8 @@ def create_app():
     # Blueprints
     from infrastructure.web.routes import register_routes
     register_routes(app)
+
+    init_scheduler()
 
 
     return app

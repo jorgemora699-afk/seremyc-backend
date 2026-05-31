@@ -68,6 +68,7 @@ class AppointmentModel(db.Model):
     receipt_url = db.Column(db.Text, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     created_by = db.Column(db.String(20), default='user')
+    reminder_sent = db.Column(db.Boolean, default=False)
 
     payment = db.relationship('FinanceModel', backref='appointment', lazy=True)
     promotion = db.relationship('PromotionModel', backref='appointments', lazy=True)

@@ -300,7 +300,6 @@ def create_appointment():
         scheduled_at=scheduled_at,
         duration=service.duration,
         status='confirmed',
-        notes=data.get('notes', ''),
         created_by='ai_agent'
     )
 
@@ -313,11 +312,58 @@ def create_appointment():
         'service': service.name,
         'scheduled_at': scheduled_at.isoformat(),
         'price': float(service.price),
-        'duration': service.duration_minutes,
+        'duration': service.duration,
         'status': 'confirmed',
         'message': '¡Cita agendada exitosamente!'
     }), 201
 
+# ─────────────────────────────────────────
+# GET /api/agent/client-history
+# Historial del cliente por teléfono
+# ─────────────────────────────────────────
+@agent_bp.route('/client-history', methods=['GET'])
+@require_agent_key
+def get_client_history():
+
+    phone = request.args.get('phone')
+    if not phone:
+        return jsonify({'error': 'El parámetro phone es requerido'}), 400
+
+    client = ClientModel.query.filter_by(phone=phone).first()
+
+    if not client:
+        return jsonify({'exists': False}), 200
+
+    appointments = AppointmentModel.query.filter_by(
+        client_id=client.id
+    ).order_by(
+        AppointmentModel.scheduled_at.desc()
+    ).limit(5).all()
+
+    return jsonify({
+        'exists': True,
+        'client_id': client.id,
+        'full_name': client.full_name,
+        'appointments': [
+            {
+                'service': a.service.name if a.service else None,
+                'scheduled_at': a.scheduled_at.isoformat(),
+                'status': a.status
+            }
+            for a in appointments
+        ]
+    })
+
+@agent_bp.route('/appointments/<int:appointment_id>/cancel', methods=['PATCH'])
+@require_agent_key
+def cancel_appointment(appointment_id):
+    appointment = AppointmentModel.query.get(appointment_id)
+    if not appointment:
+        return jsonify({'error': 'Cita no encontrada'}), 404
+
+    appointment.status = 'cancelled'
+    db.session.commit()
+    return jsonify({'message': 'Cita cancelada'}), 200
 
 # ─────────────────────────────────────────
 # HELPER
