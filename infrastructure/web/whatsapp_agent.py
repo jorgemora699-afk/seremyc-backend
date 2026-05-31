@@ -257,10 +257,6 @@ def _agregar_mensaje(numero: str, role: str, content: str) -> None:
 
 def _manejar_confirmacion_cita(numero: str, accion: str) -> str:
     try:
-        from infrastructure.database.models import AppointmentModel, ClientModel
-        from infrastructure.database.db import db
-        from infrastructure.web.flask_app import create_app
-
         phone = _normalizar_numero(numero)
 
         r = requests.get(
@@ -283,29 +279,55 @@ def _manejar_confirmacion_cita(numero: str, accion: str) -> str:
         if not proxima:
             return "No tienes citas confirmadas próximas. 😔"
 
+        nombre = data['full_name'].split()[0]
+
         if accion == 'confirmar':
             return (
-                f"✅ ¡Perfecto! Tu cita está confirmada.\n\n"
+                f"✅ ¡Perfecto {nombre}! Tu cita está confirmada.\n\n"
                 f"💆 {proxima['service']}\n"
                 f"📅 {proxima['scheduled_at']}\n\n"
                 f"¡Te esperamos en Seremyc Sthetic! 💜"
             )
-        else:
-            # Cancelar via API
+
+        elif accion == 'cancelar':
             requests.patch(
                 f'{_base_url()}/api/agent/appointments/{proxima.get("id")}/cancel',
                 headers=_obtener_headers(),
                 timeout=10
             )
             return (
-                f"😔 Entendido, hemos cancelado tu cita.\n\n"
-                f"Si deseas reagendar, escríbenos cuando quieras. 🌸"
+                f"😔 Entendido {nombre}, hemos cancelado tu cita.\n\n"
+                f"💆 {proxima['service']}\n"
+                f"📅 {proxima['scheduled_at']}\n\n"
+                f"Si deseas reagendar, escribe *REAGENDAR* cuando quieras. 🌸"
+            )
+
+        elif accion == 'reagendar':
+            # Guardar en conversación que está reagendando
+            _agregar_mensaje(numero, 'user', 'REAGENDAR')
+            _agregar_mensaje(numero, 'assistant', '')
+
+            # Inyectar contexto al LLM
+            contexto = (
+                f"[REAGENDAR]\n"
+                f"El cliente quiere reagendar su cita de {proxima['service']}.\n"
+                f"ID de la cita: {proxima.get('id')}\n"
+                f"Servicio ID: {proxima.get('service_id')}\n"
+                f"[FIN REAGENDAR]\n\n"
+                f"Pregúntale al cliente qué día prefiere para la nueva cita. "
+                f"Cuando elija el día usa CONSULTAR_DISPONIBILIDAD. "
+                f"Cuando confirme el nuevo horario, cancela la cita anterior y crea una nueva."
+            )
+            _agregar_mensaje(numero, 'user', contexto)
+
+            return (
+                f"¡Claro {nombre}! Vamos a reagendar tu cita de *{proxima['service']}*. 🗓️\n\n"
+                f"¿Qué día te quedaría mejor?"
             )
 
     except Exception as e:
-        logger.error(f"Error manejando confirmación: {e}")
+        logger.error(f"Error manejando acción {accion}: {e}")
         return "Lo siento, ocurrió un error. Por favor contáctanos directamente. 😔"
-    
 # ─────────────────────────────────────────
 # Procesar mensaje entrante
 # ─────────────────────────────────────────
@@ -314,7 +336,7 @@ def procesar_mensaje(numero: str, mensaje: str) -> str:
     mensaje_lower = mensaje.lower().strip()  
 
     # Detectar confirmación o cancelación de cita
-    if mensaje_lower in ['confirmar', 'cancelar']:
+    if mensaje_lower in ['confirmar', 'cancelar', 'reagendar']:
         return _manejar_confirmacion_cita(numero, mensaje_lower)
 
     es_primer_mensaje = numero not in conversaciones

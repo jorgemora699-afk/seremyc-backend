@@ -346,9 +346,11 @@ def get_client_history():
         'full_name': client.full_name,
         'appointments': [
             {
-                'service': a.service.name if a.service else None,
+                'id':           a.id,
+                'service':      a.service.name if a.service else None,
+                'service_id':   a.service_id,
                 'scheduled_at': a.scheduled_at.isoformat(),
-                'status': a.status
+                'status':       a.status
             }
             for a in appointments
         ]
