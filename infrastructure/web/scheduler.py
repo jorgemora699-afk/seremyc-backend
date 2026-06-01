@@ -7,127 +7,113 @@ from infrastructure.web.whatsapp_sender import enviar_mensaje
 logger = logging.getLogger(__name__)
 
 
-# ─────────────────────────────────────────
-# Tarea: enviar recordatorios 24h antes
-# ─────────────────────────────────────────
 def enviar_recordatorios():
     from infrastructure.database.db import db
     from infrastructure.database.models import AppointmentModel
-    from infrastructure.web.flask_app import create_app
 
-    app = create_app()
+    try:
+        ahora = datetime.now()
+        manana_inicio = (ahora + timedelta(days=1)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        manana_fin = manana_inicio.replace(hour=23, minute=59, second=59)
 
-    with app.app_context():
-        try:
-            ahora = datetime.now()
-            manana_inicio = (ahora + timedelta(days=1)).replace(
-                hour=0, minute=0, second=0, microsecond=0
+        citas = AppointmentModel.query.filter(
+            AppointmentModel.scheduled_at >= manana_inicio,
+            AppointmentModel.scheduled_at <= manana_fin,
+            AppointmentModel.status == 'confirmed',
+            AppointmentModel.reminder_sent == False
+        ).all()
+
+        logger.info(f"Recordatorios: {len(citas)} citas para mañana")
+
+        for cita in citas:
+            cliente = cita.client
+            servicio = cita.service
+
+            if not cliente or not (cliente.phone or cliente.whatsapp):
+                continue
+
+            telefono = cliente.whatsapp or cliente.phone
+            hora = cita.scheduled_at.strftime('%H:%M')
+            fecha = cita.scheduled_at.strftime('%d/%m/%Y')
+            nombre = cliente.full_name.split()[0]
+
+            mensaje = (
+                f"¡Hola {nombre}! 🌸 Te recordamos que mañana tienes una cita en *Seremyc Sthetic*.\n\n"
+                f"📋 *Detalle de tu cita:*\n"
+                f"💆 {servicio.name if servicio else 'Servicio'}\n"
+                f"📅 {fecha} a las {hora}\n\n"
+                f"¿Confirmas tu asistencia?\n"
+                f"✅ Responde *CONFIRMAR* para confirmar\n"
+                f"❌ Responde *CANCELAR* si no puedes asistir\n\n"
+                f"¡Te esperamos! 💜"
             )
-            manana_fin = manana_inicio.replace(
-                hour=23, minute=59, second=59
-            )
 
-            citas = AppointmentModel.query.filter(
-                AppointmentModel.scheduled_at >= manana_inicio,
-                AppointmentModel.scheduled_at <= manana_fin,
-                AppointmentModel.status == 'confirmed',
-                AppointmentModel.reminder_sent == False
-            ).all()
+            enviado = enviar_mensaje(telefono, mensaje)
 
-            logger.info(f"Recordatorios: {len(citas)} citas para mañana")
+            if enviado:
+                cita.reminder_sent = True
+                db.session.commit()
+                logger.info(f"Recordatorio enviado a {telefono} — cita {cita.id}")
 
-            for cita in citas:
-                cliente = cita.client
-                servicio = cita.service
-
-                if not cliente or not (cliente.phone or cliente.whatsapp):
-                    continue
-
-                telefono = cliente.whatsapp or cliente.phone
-                hora = cita.scheduled_at.strftime('%H:%M')
-                fecha = cita.scheduled_at.strftime('%d/%m/%Y')
-                nombre = cliente.full_name.split()[0]
-
-                mensaje = (
-                    f"¡Hola {nombre}! 🌸 Te recordamos que mañana tienes una cita en *Seremyc Sthetic*.\n\n"
-                    f"📋 *Detalle de tu cita:*\n"
-                    f"💆 {servicio.name if servicio else 'Servicio'}\n"
-                    f"📅 {fecha} a las {hora}\n\n"
-                    f"¿Confirmas tu asistencia?\n"
-                    f"✅ Responde *CONFIRMAR* para confirmar\n"
-                    f"❌ Responde *CANCELAR* si no puedes asistir\n\n"
-                    f"¡Te esperamos! 💜"
-                )
-
-                enviado = enviar_mensaje(telefono, mensaje)
-
-                if enviado:
-                    cita.reminder_sent = True
-                    db.session.commit()
-                    logger.info(f"Recordatorio enviado a {telefono} — cita {cita.id}")
-
-        except Exception as e:
-            logger.error(f"Error en enviar_recordatorios: {e}")
+    except Exception as e:
+        logger.error(f"Error en enviar_recordatorios: {e}")
 
 
 def enviar_encuestas():
-    from infrastructure.database.models import AppointmentModel
     from infrastructure.database.db import db
-    from infrastructure.web.flask_app import create_app
+    from infrastructure.database.models import AppointmentModel
 
-    app = create_app()
+    try:
+        ahora = datetime.now()
+        hace_dos_horas = ahora - timedelta(hours=2)
+        hace_tres_horas = ahora - timedelta(hours=3)
 
-    with app.app_context():
-        try:
-            ahora = datetime.now()
-            # Citas que terminaron hace 2 horas
-            hace_dos_horas = ahora - timedelta(hours=2)
-            hace_tres_horas = ahora - timedelta(hours=3)
+        citas = AppointmentModel.query.filter(
+            AppointmentModel.scheduled_at >= hace_tres_horas,
+            AppointmentModel.scheduled_at <= hace_dos_horas,
+            AppointmentModel.status == 'confirmed',
+            AppointmentModel.survey_sent == False
+        ).all()
 
-            citas = AppointmentModel.query.filter(
-                AppointmentModel.scheduled_at >= hace_tres_horas,
-                AppointmentModel.scheduled_at <= hace_dos_horas,
-                AppointmentModel.status == 'confirmed',
-                AppointmentModel.survey_sent == False
-            ).all()
+        logger.info(f"Encuestas: {len(citas)} citas para encuestar")
 
-            logger.info(f"Encuestas: {len(citas)} citas para encuestar")
+        for cita in citas:
+            cliente = cita.client
+            servicio = cita.service
 
-            for cita in citas:
-                cliente = cita.client
-                servicio = cita.service
+            if not cliente or not (cliente.phone or cliente.whatsapp):
+                continue
 
-                if not cliente or not (cliente.phone or cliente.whatsapp):
-                    continue
+            telefono = cliente.whatsapp or cliente.phone
+            nombre = cliente.full_name.split()[0]
 
-                telefono = cliente.whatsapp or cliente.phone
-                nombre = cliente.full_name.split()[0]
+            mensaje = (
+                f"¡Hola {nombre}! 🌸 Esperamos que hayas disfrutado tu sesión de "
+                f"*{servicio.name if servicio else 'nuestro servicio'}* hoy.\n\n"
+                f"¿Nos regalas un minuto? 😊\n\n"
+                f"¿Cómo calificarías tu experiencia en Seremyc Sthetic?\n\n"
+                f"⭐ 1 - Muy mala\n"
+                f"⭐⭐ 2 - Mala\n"
+                f"⭐⭐⭐ 3 - Regular\n"
+                f"⭐⭐⭐⭐ 4 - Buena\n"
+                f"⭐⭐⭐⭐⭐ 5 - Excelente\n\n"
+                f"Responde con un número del 1 al 5. 💜"
+            )
 
-                mensaje = (
-                    f"¡Hola {nombre}! 🌸 Esperamos que hayas disfrutado tu sesión de "
-                    f"*{servicio.name if servicio else 'nuestro servicio'}* hoy.\n\n"
-                    f"¿Nos regalas un minuto? 😊\n\n"
-                    f"¿Cómo calificarías tu experiencia en Seremyc Sthetic?\n\n"
-                    f"⭐ 1 - Muy mala\n"
-                    f"⭐⭐ 2 - Mala\n"
-                    f"⭐⭐⭐ 3 - Regular\n"
-                    f"⭐⭐⭐⭐ 4 - Buena\n"
-                    f"⭐⭐⭐⭐⭐ 5 - Excelente\n\n"
-                    f"Responde con un número del 1 al 5. 💜"
-                )
+            enviado = enviar_mensaje(telefono, mensaje)
 
-                enviado = enviar_mensaje(telefono, mensaje)
+            if enviado:
+                cita.survey_sent = True
+                db.session.commit()
+                logger.info(f"Encuesta enviada a {telefono} — cita {cita.id}")
 
-                if enviado:
-                    cita.survey_sent = True
-                    db.session.commit()
-                    logger.info(f"Encuesta enviada a {telefono} — cita {cita.id}")
-
-        except Exception as e:
-            logger.error(f"Error en enviar_encuestas: {e}")
+    except Exception as e:
+        logger.error(f"Error en enviar_encuestas: {e}")
 
 
-def init_scheduler():
+def init_scheduler(app):
     scheduler = BackgroundScheduler(timezone='America/Bogota')
 
     scheduler.add_job(
@@ -141,7 +127,7 @@ def init_scheduler():
     scheduler.add_job(
         enviar_encuestas,
         'interval',
-        minutes=30,      # Revisar cada 30 minutos
+        minutes=30,
         id='encuestas',
         replace_existing=True
     )
