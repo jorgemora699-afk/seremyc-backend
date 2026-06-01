@@ -4,6 +4,7 @@ import logging
 import requests
 from anthropic import Anthropic
 from datetime import datetime
+from time import time
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -14,9 +15,63 @@ conversaciones: dict[str, list] = {}
 ultima_categoria: dict[str, str] = {}
 servicios_categoria: dict[str, list] = {}
 
-MAX_HISTORIAL = 20
+MAX_HISTORIAL = 10  # ← reducido de 20 a 10
 
 CATEGORIAS = ['facial', 'corporal', 'capilar', 'sueroterapia', 'masaje']
+
+# ─────────────────────────────────────────
+# CACHÉ DE SERVICIOS (nuevo)
+# ─────────────────────────────────────────
+_cache_servicios: dict = {'data': [], 'ts': 0.0}
+_CACHE_TTL = 300  # 5 minutos
+
+
+def _obtener_servicios_raw() -> list:
+    """Obtiene servicios con caché de 5 minutos para evitar llamadas repetidas."""
+    if time() - _cache_servicios['ts'] < _CACHE_TTL and _cache_servicios['data']:
+        return _cache_servicios['data']
+    try:
+        r = requests.get(
+            f'{_base_url()}/api/agent/services',
+            headers=_obtener_headers(),
+            timeout=5
+        )
+        r.raise_for_status()
+        data = r.json()
+        _cache_servicios['data'] = data
+        _cache_servicios['ts'] = time()
+        return data
+    except Exception as e:
+        logger.error(f"Error obteniendo servicios: {e}")
+        return _cache_servicios['data']  # devuelve caché viejo si falla
+
+
+def _obtener_servicios_texto(servicios_raw: list) -> str:
+    """Recibe servicios_raw ya obtenido para evitar doble llamada."""
+    if not servicios_raw:
+        return "Servicios disponibles: consultar con la asistente."
+
+    categorias: dict[str, list] = {}
+    for s in servicios_raw:
+        cat = s.get('category', 'otro').lower().strip()
+        categorias.setdefault(cat, [])
+        duracion = (
+            f"{s['duration_minutes'] // 60}h {s['duration_minutes'] % 60}min"
+            if s['duration_minutes'] >= 60
+            else f"{s['duration_minutes']} min"
+        )
+        categorias[cat].append(
+            f"  - {s['name']} (ID: {s['id']}) - {duracion} - ${float(s['price']):,.0f}"
+        )
+
+    texto = "SERVICIOS POR CATEGORÍA:\n\n"
+    for cat, items in categorias.items():
+        texto += f"CATEGORÍA {cat.upper()}:\n"
+        texto += "\n".join(items)
+        texto += "\n\n"
+
+    return texto
+
 
 SYSTEM_PROMPT = """Eres la asistente virtual de Seremyc Sthetic, un centro de bienestar y estética.
 Tu nombre es Sere.
@@ -91,47 +146,6 @@ def _obtener_headers() -> dict:
 
 def _base_url() -> str:
     return os.getenv('API_BASE_URL', 'http://localhost:5000')
-
-
-def _obtener_servicios_raw() -> list:
-    try:
-        r = requests.get(
-            f'{_base_url()}/api/agent/services',
-            headers=_obtener_headers(),
-            timeout=5
-        )
-        r.raise_for_status()
-        return r.json()
-    except Exception as e:
-        logger.error(f"Error obteniendo servicios: {e}")
-        return []
-
-
-def _obtener_servicios_texto() -> str:
-    servicios_raw = _obtener_servicios_raw()
-    if not servicios_raw:
-        return "Servicios disponibles: consultar con la asistente."
-
-    categorias: dict[str, list] = {}
-    for s in servicios_raw:
-        cat = s.get('category', 'otro').lower().strip()
-        categorias.setdefault(cat, [])
-        duracion = (
-            f"{s['duration_minutes'] // 60}h {s['duration_minutes'] % 60}min"
-            if s['duration_minutes'] >= 60
-            else f"{s['duration_minutes']} min"
-        )
-        categorias[cat].append(
-            f"  - {s['name']} (ID: {s['id']}) - {duracion} - ${float(s['price']):,.0f}"
-        )
-
-    texto = "SERVICIOS POR CATEGORÍA:\n\n"
-    for cat, items in categorias.items():
-        texto += f"CATEGORÍA {cat.upper()}:\n"
-        texto += "\n".join(items)
-        texto += "\n\n"
-
-    return texto
 
 
 def _verificar_disponibilidad(fecha_cita: str) -> bool:
@@ -354,7 +368,6 @@ def _extraer_token(texto: str, token: str) -> str | None:
     if token not in texto:
         return None
     parte = texto.split(token)[1].strip()
-    # Tomar solo hasta el primer salto de línea o fin de texto
     linea = parte.split('\n')[0].strip()
     return linea
 
@@ -374,6 +387,8 @@ def procesar_mensaje(numero: str, mensaje: str) -> str:
             return resultado
 
     es_primer_mensaje = numero not in conversaciones
+
+    # ← UNA sola llamada a servicios por request
     servicios_raw = _obtener_servicios_raw()
 
     # Inyectar historial si es el primer mensaje
@@ -435,7 +450,9 @@ def procesar_mensaje(numero: str, mensaje: str) -> str:
 
     # Flujo normal con el LLM
     fecha_actual = datetime.now().strftime('%A %d de %B de %Y')
-    servicios_texto = _obtener_servicios_texto()
+
+    # ← reutiliza servicios_raw ya obtenido, sin segunda llamada
+    servicios_texto = _obtener_servicios_texto(servicios_raw)
 
     system = (
         SYSTEM_PROMPT.replace('{fecha_actual}', fecha_actual)
@@ -446,7 +463,7 @@ def procesar_mensaje(numero: str, mensaje: str) -> str:
 
     respuesta_llm = client.messages.create(
         model='claude-haiku-4-5-20251001',
-        max_tokens=1000,
+        max_tokens=400,  # ← reducido de 1000 a 400
         system=system,
         messages=conversaciones[numero]
     )
@@ -482,7 +499,6 @@ def _manejar_consulta_disponibilidad(numero: str, texto: str, system: str) -> st
     slots = _slots_disponibles(fecha)
     resultado_tool = _formatear_slots(fecha, slots)
 
-    # Reemplazar el token en el historial por el resultado real
     conversaciones[numero][-1]['content'] = f"[Consulté disponibilidad para {fecha}]"
 
     tool_result_msg = {
@@ -497,7 +513,7 @@ def _manejar_consulta_disponibilidad(numero: str, texto: str, system: str) -> st
 
     respuesta_llm2 = client.messages.create(
         model='claude-haiku-4-5-20251001',
-        max_tokens=500,
+        max_tokens=400,  # ← reducido de 500 a 400
         system=system,
         messages=conversaciones[numero] + [tool_result_msg]
     )
@@ -513,7 +529,6 @@ def _agendar_cita(numero: str, texto: str) -> str:
             raise ValueError("Token AGENDAR_CITA no encontrado")
         datos = json.loads(json_str)
 
-        # Asegurar que servicio_id sea entero
         datos['servicio_id'] = int(datos['servicio_id'])
 
         headers = _obtener_headers()
