@@ -50,7 +50,7 @@ def _enviar_meta(numero: str, texto: str) -> bool:
         numero_limpio = numero.replace('whatsapp:', '').strip()
 
         r = requests.post(
-            f'https://graph.facebook.com/v18.0/{phone_number_id}/messages',
+            f'https://graph.facebook.com/v23.0/{phone_number_id}/messages',
             headers={
                 'Authorization': f'Bearer {access_token}',
                 'Content-Type':  'application/json'
