@@ -2,11 +2,15 @@ from flask import Blueprint, request, jsonify
 from application.use_cases.auth.login_use_case import LoginUseCase
 from application.use_cases.auth.register_use_case import RegisterUseCase
 from flask_jwt_extended import jwt_required, get_jwt_identity
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 
 auth_bp = Blueprint('auth', __name__)
+limiter = Limiter(key_func=get_remote_address)
 
 
 @auth_bp.route('/login', methods=['POST'])
+@limiter.limit("5 per minute")  # máximo 5 intentos por minuto
 def login():
     try:
         data = request.get_json()
