@@ -2,13 +2,13 @@ import os
 import json
 import logging
 import requests
-from groq import Groq
+from anthropic import Anthropic
 from datetime import datetime
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-client = Groq(api_key=os.getenv('GROQ_API_KEY'))
+client = Anthropic()
 
 conversaciones: dict[str, list] = {}
 ultima_categoria: dict[str, str] = {}
@@ -444,13 +444,13 @@ def procesar_mensaje(numero: str, mensaje: str) -> str:
 
     _agregar_mensaje(numero, 'user', mensaje)
 
-    respuesta_llm = client.chat.completions.create(
-        model='llama-3.3-70b-versatile',
-        messages=[{'role': 'system', 'content': system}] + conversaciones[numero],
-        max_tokens=1000
+    respuesta_llm = client.messages.create(
+        model='claude-haiku-4-5-20251001',
+        max_tokens=1000,
+        system=system,
+        messages=conversaciones[numero]
     )
-
-    texto_respuesta = respuesta_llm.choices[0].message.content
+    texto_respuesta = respuesta_llm.content[0].text
     _agregar_mensaje(numero, 'assistant', texto_respuesta)
 
     # Interceptar CONSULTAR_DISPONIBILIDAD
@@ -495,15 +495,13 @@ def _manejar_consulta_disponibilidad(numero: str, texto: str, system: str) -> st
         )
     }
 
-    respuesta_llm2 = client.chat.completions.create(
-        model='llama-3.3-70b-versatile',
-        messages=[{'role': 'system', 'content': system}]
-                 + conversaciones[numero]
-                 + [tool_result_msg],
-        max_tokens=500
+    respuesta_llm2 = client.messages.create(
+        model='claude-haiku-4-5-20251001',
+        max_tokens=500,
+        system=system,
+        messages=conversaciones[numero] + [tool_result_msg]
     )
-
-    respuesta_final = respuesta_llm2.choices[0].message.content
+    respuesta_final = respuesta_llm2.content[0].text
     _agregar_mensaje(numero, 'assistant', respuesta_final)
     return respuesta_final
 
