@@ -81,6 +81,9 @@ def _handle_meta():
 @whatsapp_bp.route('/whatsapp', methods=['GET'])
 def whatsapp_verify():
     token = request.args.get('hub.verify_token')
-    if token == os.getenv('META_VERIFY_TOKEN'):
+    expected = os.getenv('META_VERIFY_TOKEN')
+    print(f"TOKEN RECIBIDO: {token}")
+    print(f"TOKEN ESPERADO: {expected}")
+    if token == expected:
         return request.args.get('hub.challenge'), 200
     return 'Token inválido', 403
