@@ -46,7 +46,6 @@ def _enviar_meta(numero: str, texto: str) -> bool:
         phone_number_id = os.getenv('META_PHONE_NUMBER_ID')
         access_token    = os.getenv('META_ACCESS_TOKEN')
 
-        # Limpiar número — Meta no acepta el prefijo whatsapp:
         numero_limpio = numero.replace('whatsapp:', '').strip()
 
         r = requests.post(
@@ -63,6 +62,7 @@ def _enviar_meta(numero: str, texto: str) -> bool:
             },
             timeout=10
         )
+        logger.error(f"Meta response: {r.status_code} - {r.text}")  # ← AGREGAR
         r.raise_for_status()
         return True
     except Exception as e:
