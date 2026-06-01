@@ -10,13 +10,11 @@ logger = logging.getLogger(__name__)
 
 client = Groq(api_key=os.getenv('GROQ_API_KEY'))
 
-# ─────────────────────────────────────────
-# Estado en memoria (reemplazar por Redis en producción)
-# ─────────────────────────────────────────
 conversaciones: dict[str, list] = {}
 ultima_categoria: dict[str, str] = {}
+servicios_categoria: dict[str, list] = {}  # guarda los servicios mostrados por número
 
-MAX_HISTORIAL = 20  # Máximo de mensajes por conversación
+MAX_HISTORIAL = 20
 
 CATEGORIAS = ['facial', 'corporal', 'capilar', 'sueroterapia', 'masaje']
 
@@ -51,11 +49,9 @@ Saluda brevemente y pregunta qué tipo de servicio busca. Muestra las categoría
 5️⃣ Masaje"
 
 PASO 2 — SERVICIO ELEGIDO:
-Cuando el cliente mencione el nombre de un servicio o indique cuál quiere, pregunta:
+El sistema ya mostró los servicios numerados. Cuando el cliente escriba un número o el nombre del servicio, confirma:
 "¿Confirmas que quieres agendar [nombre del servicio]? 😊"
 Luego inicia el PASO 3.
-Si el cliente dice "sí" o "quiero ese" sin especificar cuál, pregúntale:
-"¿Cuál de los servicios te gustaría agendar? Por favor escribe el nombre. 😊"
 
 PASO 3 — RECOLECTAR DATOS (uno por uno, no todos juntos):
 Pide cada dato en este orden:
@@ -81,11 +77,7 @@ El servicio_id debe ser el ID numérico del servicio que el cliente eligió, seg
 Sé cálida, profesional y usa emojis ocasionalmente. Responde siempre en español. Mensajes cortos y directos."""
 
 
-# ─────────────────────────────────────────
-# Helpers internos
-# ─────────────────────────────────────────
 def _normalizar_numero(numero: str) -> str:
-    """Elimina el prefijo 'whatsapp:' y espacios del número."""
     return numero.replace('whatsapp:', '').strip()
 
 
@@ -100,9 +92,6 @@ def _base_url() -> str:
     return os.getenv('API_BASE_URL', 'http://localhost:5000')
 
 
-# ─────────────────────────────────────────
-# Obtener servicios raw desde la API
-# ─────────────────────────────────────────
 def _obtener_servicios_raw() -> list:
     try:
         r = requests.get(
@@ -117,9 +106,6 @@ def _obtener_servicios_raw() -> list:
         return []
 
 
-# ─────────────────────────────────────────
-# Formatear servicios para el prompt
-# ─────────────────────────────────────────
 def _obtener_servicios_texto() -> str:
     servicios_raw = _obtener_servicios_raw()
     if not servicios_raw:
@@ -147,11 +133,7 @@ def _obtener_servicios_texto() -> str:
     return texto
 
 
-# ─────────────────────────────────────────
-# Verificar disponibilidad
-# ─────────────────────────────────────────
 def _verificar_disponibilidad(fecha_cita: str) -> bool:
-    """Verifica si el horario está disponible. fecha_cita: YYYY-MM-DDTHH:MM:00"""
     try:
         dt = datetime.fromisoformat(fecha_cita)
         fecha = dt.strftime('%Y-%m-%d')
@@ -171,13 +153,10 @@ def _verificar_disponibilidad(fecha_cita: str) -> bool:
 
     except Exception as e:
         logger.error(f"Error verificando disponibilidad: {e}")
-        return True  # Si falla la API, dejar pasar y que lo detecte al agendar
+        return True
 
 
-# ─────────────────────────────────────────
-# Construir respuesta de categoría
-# ─────────────────────────────────────────
-def _respuesta_categoria(categoria: str, servicios_raw: list) -> str:
+def _respuesta_categoria(numero: str, categoria: str, servicios_raw: list) -> str:
     filtrados = [
         s for s in servicios_raw
         if s.get('category', '').lower().strip() == categoria
@@ -189,24 +168,23 @@ def _respuesta_categoria(categoria: str, servicios_raw: list) -> str:
             f"¿Te gustaría ver otra categoría?"
         )
 
+    # Guardar los servicios mostrados para este número
+    servicios_categoria[numero] = filtrados
+
     texto = f"🌸 Servicios de {categoria.capitalize()}:\n\n"
-    for s in filtrados:
+    for i, s in enumerate(filtrados, 1):
         duracion = (
             f"{s['duration_minutes'] // 60}h {s['duration_minutes'] % 60}min"
             if s['duration_minutes'] >= 60
             else f"{s['duration_minutes']} min"
         )
-        texto += f"• {s['name']} - {duracion} - ${float(s['price']):,.0f}\n"
+        texto += f"{i}️⃣ {s['name']} - {duracion} - ${float(s['price']):,.0f}\n"
 
-    texto += "\n¿Cuál te gustaría agendar? 😊"
+    texto += "\n¿Cuál te gustaría agendar? Escribe el número o el nombre 😊"
     return texto
 
 
-# ─────────────────────────────────────────
-# Obtener slots disponibles para una fecha
-# ─────────────────────────────────────────
 def _slots_disponibles(fecha: str) -> list[str]:
-    """Retorna lista de horarios libres para una fecha YYYY-MM-DD."""
     try:
         r = requests.get(
             f'{_base_url()}/api/agent/availability',
@@ -222,7 +200,6 @@ def _slots_disponibles(fecha: str) -> list[str]:
 
 
 def _formatear_slots(fecha: str, slots: list[str]) -> str:
-    """Formatea los horarios disponibles para mostrarlos al cliente."""
     try:
         dt = datetime.strptime(fecha, '%Y-%m-%d')
         fecha_legible = dt.strftime('%A %d de %B de %Y')
@@ -243,22 +220,32 @@ def _formatear_slots(fecha: str, slots: list[str]) -> str:
     )
 
 
-# ─────────────────────────────────────────
-# Gestión del historial
-# ─────────────────────────────────────────
 def _agregar_mensaje(numero: str, role: str, content: str) -> None:
-    """Agrega un mensaje y recorta el historial si supera MAX_HISTORIAL."""
     conversaciones.setdefault(numero, [])
     conversaciones[numero].append({'role': role, 'content': content})
-
-    # Mantener solo los últimos MAX_HISTORIAL mensajes
     if len(conversaciones[numero]) > MAX_HISTORIAL:
         conversaciones[numero] = conversaciones[numero][-MAX_HISTORIAL:]
+
+
+def _obtener_historial_cliente(numero: str) -> dict:
+    try:
+        phone = _normalizar_numero(numero)
+        r = requests.get(
+            f'{_base_url()}/api/agent/client-history',
+            params={'phone': phone},
+            headers=_obtener_headers(),
+            timeout=5
+        )
+        r.raise_for_status()
+        return r.json()
+    except Exception as e:
+        logger.error(f"Error obteniendo historial: {e}")
+        return {'exists': False}
+
 
 def _manejar_confirmacion_cita(numero: str, accion: str) -> str:
     try:
         phone = _normalizar_numero(numero)
-
         r = requests.get(
             f'{_base_url()}/api/agent/client-history',
             params={'phone': phone},
@@ -303,20 +290,16 @@ def _manejar_confirmacion_cita(numero: str, accion: str) -> str:
             )
 
         elif accion == 'reagendar':
-            # Guardar en conversación que está reagendando
             _agregar_mensaje(numero, 'user', 'REAGENDAR')
             _agregar_mensaje(numero, 'assistant', '')
 
-            # Inyectar contexto al LLM
             contexto = (
                 f"[REAGENDAR]\n"
                 f"El cliente quiere reagendar su cita de {proxima['service']}.\n"
                 f"ID de la cita: {proxima.get('id')}\n"
                 f"Servicio ID: {proxima.get('service_id')}\n"
                 f"[FIN REAGENDAR]\n\n"
-                f"Pregúntale al cliente qué día prefiere para la nueva cita. "
-                f"Cuando elija el día usa CONSULTAR_DISPONIBILIDAD. "
-                f"Cuando confirme el nuevo horario, cancela la cita anterior y crea una nueva."
+                f"Pregúntale al cliente qué día prefiere para la nueva cita."
             )
             _agregar_mensaje(numero, 'user', contexto)
 
@@ -328,11 +311,11 @@ def _manejar_confirmacion_cita(numero: str, accion: str) -> str:
     except Exception as e:
         logger.error(f"Error manejando acción {accion}: {e}")
         return "Lo siento, ocurrió un error. Por favor contáctanos directamente. 😔"
-    
+
+
 def _guardar_calificacion(numero: str, calificacion: int) -> str | None:
     try:
         phone = _normalizar_numero(numero)
-
         r = requests.get(
             f'{_base_url()}/api/agent/client-history',
             params={'phone': phone},
@@ -344,7 +327,6 @@ def _guardar_calificacion(numero: str, calificacion: int) -> str | None:
         if not data.get('exists'):
             return None
 
-        # Buscar la cita más reciente con encuesta enviada
         citas = data.get('appointments', [])
         cita_encuesta = next(
             (c for c in citas if c.get('survey_sent') and not c.get('survey_rating')),
@@ -352,9 +334,8 @@ def _guardar_calificacion(numero: str, calificacion: int) -> str | None:
         )
 
         if not cita_encuesta:
-            return None  # No hay encuesta pendiente, el número es otra cosa
+            return None
 
-        # Guardar calificación
         requests.patch(
             f'{_base_url()}/api/agent/appointments/{cita_encuesta["id"]}/survey',
             json={'rating': calificacion},
@@ -381,30 +362,29 @@ def _guardar_calificacion(numero: str, calificacion: int) -> str | None:
     except Exception as e:
         logger.error(f"Error guardando calificación: {e}")
         return None
-    
+
+
 # ─────────────────────────────────────────
 # Procesar mensaje entrante
 # ─────────────────────────────────────────
 def procesar_mensaje(numero: str, mensaje: str) -> str:
 
-    mensaje_lower = mensaje.lower().strip()  
+    mensaje_lower = mensaje.lower().strip()
 
-    # Detectar confirmación o cancelación de cita
+    # Detectar confirmación, cancelación o reagendamiento
     if mensaje_lower in ['confirmar', 'cancelar', 'reagendar']:
         return _manejar_confirmacion_cita(numero, mensaje_lower)
-    
-    # Detectar calificación de encuesta (1-5)
+
+    # Detectar calificación de encuesta (solo si hay encuesta pendiente)
     if mensaje_lower in ['1', '2', '3', '4', '5']:
         resultado = _guardar_calificacion(numero, int(mensaje_lower))
         if resultado:
             return resultado
 
     es_primer_mensaje = numero not in conversaciones
-
-    mensaje_lower = mensaje.lower().strip()
     servicios_raw = _obtener_servicios_raw()
 
-    # Si es el primer mensaje, inyectar historial en el contexto
+    # Inyectar historial si es el primer mensaje
     if es_primer_mensaje:
         historial = _obtener_historial_cliente(numero)
         if historial.get('exists'):
@@ -418,28 +398,49 @@ def procesar_mensaje(numero: str, mensaje: str) -> str:
                 contexto += f"Último servicio: {ultimo_servicio}\n"
             contexto += "[FIN CONTEXTO]\n\n"
             contexto += "Saluda al cliente por su nombre y menciona su último servicio de forma natural."
-
             _agregar_mensaje(numero, 'user', contexto)
 
-    # ── Detectar cambio de categoría (siempre, no solo al inicio) ──────────
+    # ── Detectar selección de servicio por número ──────────────────────────
+    if mensaje_lower.strip().isdigit() and numero in servicios_categoria:
+        idx = int(mensaje_lower.strip()) - 1
+        servicios_mostrados = servicios_categoria[numero]
+        if 0 <= idx < len(servicios_mostrados):
+            servicio = servicios_mostrados[idx]
+            respuesta = (
+                f"¿Confirmas que quieres agendar *{servicio['name']}*? 😊\n\n"
+                f"💰 Precio: ${float(servicio['price']):,.0f}\n"
+                f"⏱ Duración: {servicio['duration_minutes']} min"
+            )
+            # Guardar el servicio seleccionado en el contexto
+            contexto_servicio = (
+                f"[SERVICIO SELECCIONADO]\n"
+                f"Nombre: {servicio['name']}\n"
+                f"ID: {servicio['id']}\n"
+                f"Precio: ${float(servicio['price']):,.0f}\n"
+                f"[FIN SERVICIO SELECCIONADO]"
+            )
+            _agregar_mensaje(numero, 'user', contexto_servicio)
+            _agregar_mensaje(numero, 'assistant', respuesta)
+            return respuesta
+
+    # ── Detectar selección de categoría ───────────────────────────────────
     categoria_detectada = None
+    mapa_numeros = {
+        '1': 'facial', '2': 'corporal', '3': 'capilar',
+        '4': 'sueroterapia', '5': 'masaje'
+    }
 
-    for cat in CATEGORIAS:
-        if cat in mensaje_lower:
-            categoria_detectada = cat
-            break
-
-    if not categoria_detectada:
-        mapa_numeros = {
-            '1': 'facial', '2': 'corporal', '3': 'capilar',
-            '4': 'sueroterapia', '5': 'masaje'
-        }
-        categoria_detectada = mapa_numeros.get(mensaje_lower.strip())
+    # Solo detectar categoría si el mensaje es exactamente un número o categoría sola
+    if mensaje_lower.strip() in mapa_numeros and numero not in servicios_categoria:
+        categoria_detectada = mapa_numeros[mensaje_lower.strip()]
+    elif mensaje_lower.strip() in CATEGORIAS:
+        categoria_detectada = mensaje_lower.strip()
 
     if categoria_detectada:
-        # Actualizar (o limpiar) la categoría activa
         ultima_categoria[numero] = categoria_detectada
-        respuesta = _respuesta_categoria(categoria_detectada, servicios_raw)
+        # Limpiar servicios anteriores al cambiar de categoría
+        servicios_categoria.pop(numero, None)
+        respuesta = _respuesta_categoria(numero, categoria_detectada, servicios_raw)
         _agregar_mensaje(numero, 'user', mensaje)
         _agregar_mensaje(numero, 'assistant', respuesta)
         return respuesta
@@ -473,7 +474,6 @@ def procesar_mensaje(numero: str, mensaje: str) -> str:
         resultado = _agendar_cita(numero, texto_respuesta.strip())
         conversaciones[numero][-1]['content'] = resultado
         return resultado
-    
 
     return texto_respuesta
 
@@ -482,16 +482,12 @@ def procesar_mensaje(numero: str, mensaje: str) -> str:
 # Manejar tool call CONSULTAR_DISPONIBILIDAD
 # ─────────────────────────────────────────
 def _manejar_consulta_disponibilidad(numero: str, texto: str, system: str) -> str:
-    """
-    Intercepta el token CONSULTAR_DISPONIBILIDAD emitido por el LLM,
-    consulta la API, inyecta el resultado y pide al LLM que continúe.
-    """
     try:
         json_str = texto.replace('CONSULTAR_DISPONIBILIDAD:', '').strip()
         datos = json.loads(json_str)
         fecha = datos['fecha']
     except (json.JSONDecodeError, KeyError) as e:
-        logger.error(f"Token CONSULTAR_DISPONIBILIDAD malformado: {e} — texto: {texto}")
+        logger.error(f"Token CONSULTAR_DISPONIBILIDAD malformado: {e}")
         respuesta_error = "Lo siento, tuve un problema consultando la disponibilidad. ¿Puedes repetirme el día? 😔"
         conversaciones[numero][-1]['content'] = respuesta_error
         return respuesta_error
@@ -499,7 +495,6 @@ def _manejar_consulta_disponibilidad(numero: str, texto: str, system: str) -> st
     slots = _slots_disponibles(fecha)
     resultado_tool = _formatear_slots(fecha, slots)
 
-    # Inyectar el resultado como mensaje del sistema (tool result)
     tool_result_msg = {
         'role': 'user',
         'content': (
@@ -510,7 +505,6 @@ def _manejar_consulta_disponibilidad(numero: str, texto: str, system: str) -> st
         )
     }
 
-    # Segunda llamada al LLM con el resultado inyectado
     respuesta_llm2 = client.chat.completions.create(
         model='llama-3.3-70b-versatile',
         messages=[{'role': 'system', 'content': system}]
@@ -520,26 +514,9 @@ def _manejar_consulta_disponibilidad(numero: str, texto: str, system: str) -> st
     )
 
     respuesta_final = respuesta_llm2.choices[0].message.content
-
-    # Reemplazar el token en el historial por la respuesta legible
     conversaciones[numero][-1]['content'] = respuesta_final
-
     return respuesta_final
 
-def _obtener_historial_cliente(numero: str) -> dict:
-    try:
-        phone = _normalizar_numero(numero)
-        r = requests.get(
-            f'{_base_url()}/api/agent/client-history',
-            params={'phone': phone},
-            headers=_obtener_headers(),
-            timeout=5
-        )
-        r.raise_for_status()
-        return r.json()
-    except Exception as e:
-        logger.error(f"Error obteniendo historial: {e}")
-        return {'exists': False}
 
 # ─────────────────────────────────────────
 # Agendar cita en la app
@@ -551,7 +528,6 @@ def _agendar_cita(numero: str, texto: str) -> str:
 
         headers = _obtener_headers()
 
-        # ── Verificar disponibilidad ─────────────────────────────────────
         if not _verificar_disponibilidad(datos['fecha_cita']):
             dt = datetime.fromisoformat(datos['fecha_cita'])
             fecha = dt.strftime('%Y-%m-%d')
@@ -571,7 +547,6 @@ def _agendar_cita(numero: str, texto: str) -> str:
                 f"¿Te gustaría alguno de estos horarios?"
             )
 
-        # ── Crear o actualizar cliente ───────────────────────────────────
         r_cliente = requests.post(
             f'{_base_url()}/api/agent/clients',
             json={
@@ -590,7 +565,6 @@ def _agendar_cita(numero: str, texto: str) -> str:
         r_cliente.raise_for_status()
         cliente_id = r_cliente.json()['client_id']
 
-        # ── Crear cita ───────────────────────────────────────────────────
         r_cita = requests.post(
             f'{_base_url()}/api/agent/appointments',
             json={
@@ -605,6 +579,10 @@ def _agendar_cita(numero: str, texto: str) -> str:
         r_cita.raise_for_status()
         cita = r_cita.json()
 
+        # Limpiar estado de la conversación al agendar exitosamente
+        servicios_categoria.pop(numero, None)
+        ultima_categoria.pop(numero, None)
+
         return (
             f"✅ ¡Tu cita ha sido agendada exitosamente!\n\n"
             f"📋 Resumen:\n"
@@ -616,7 +594,7 @@ def _agendar_cita(numero: str, texto: str) -> str:
         )
 
     except json.JSONDecodeError as e:
-        logger.error(f"JSON inválido en AGENDAR_CITA: {e} — texto: {texto}")
+        logger.error(f"JSON inválido en AGENDAR_CITA: {e}")
         return (
             "Lo siento, hubo un problema al procesar los datos de tu cita. 😔\n"
             "Por favor intenta de nuevo."
