@@ -386,6 +386,72 @@ def save_survey(appointment_id):
     return jsonify({'message': 'Encuesta guardada'}), 200
 
 # ─────────────────────────────────────────
+# GET modo de conversación
+# ─────────────────────────────────────────
+@agent_bp.route('/conversation-mode/<phone>', methods=['GET'])
+@require_agent_key
+def get_conversation_mode(phone):
+    from infrastructure.database.models import ConversationModeModel
+    modo = ConversationModeModel.query.filter_by(phone=phone).first()
+    return jsonify({
+        'phone': phone,
+        'mode': modo.mode if modo else 'bot'
+    })
+
+
+# ─────────────────────────────────────────
+# PUT cambiar modo de conversación
+# ─────────────────────────────────────────
+@agent_bp.route('/conversation-mode/<phone>', methods=['PUT'])
+@require_agent_key
+def set_conversation_mode(phone):
+    from infrastructure.database.models import ConversationModeModel
+    data = request.get_json()
+    new_mode = data.get('mode')
+
+    if new_mode not in ['bot', 'human']:
+        return jsonify({'error': 'Modo inválido'}), 400
+
+    modo = ConversationModeModel.query.filter_by(phone=phone).first()
+    if modo:
+        modo.mode = new_mode
+        modo.updated_by = data.get('updated_by', 'admin')
+    else:
+        modo = ConversationModeModel(
+            phone=phone,
+            mode=new_mode,
+            updated_by=data.get('updated_by', 'admin')
+        )
+        db.session.add(modo)
+
+    db.session.commit()
+    return jsonify({'phone': phone, 'mode': new_mode})
+
+
+# ─────────────────────────────────────────
+# GET lista de conversaciones activas
+# ─────────────────────────────────────────
+@agent_bp.route('/conversations', methods=['GET'])
+@require_agent_key
+def get_conversations():
+    from infrastructure.database.models import ConversationModeModel, ClientModel
+    modos = ConversationModeModel.query.order_by(
+        ConversationModeModel.updated_at.desc()
+    ).all()
+
+    resultado = []
+    for m in modos:
+        cliente = ClientModel.query.filter_by(phone=m.phone).first()
+        resultado.append({
+            'phone':      m.phone,
+            'mode':       m.mode,
+            'name':       cliente.full_name if cliente else m.phone,
+            'updated_at': m.updated_at.isoformat() if m.updated_at else None
+        })
+
+    return jsonify(resultado)
+
+# ─────────────────────────────────────────
 # HELPER
 # ─────────────────────────────────────────
 def _parse_date(value):

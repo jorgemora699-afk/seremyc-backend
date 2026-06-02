@@ -90,6 +90,14 @@ class FinanceModel(db.Model):
     appointment_id = db.Column(db.Integer, db.ForeignKey('appointments.id'))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
+class ConversationModeModel(db.Model):
+    __tablename__ = 'conversation_modes'
+
+    id         = db.Column(db.Integer, primary_key=True)
+    phone      = db.Column(db.String(20), nullable=False, unique=True, index=True)
+    mode       = db.Column(db.String(10), default='bot')  # 'bot' | 'human'
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_by = db.Column(db.String(50))  # quien cambió el modo
 
 class InventoryModel(db.Model):
     __tablename__ = 'inventory'

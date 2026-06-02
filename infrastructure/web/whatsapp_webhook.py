@@ -1,5 +1,6 @@
 import os
 import logging
+import requests
 from flask import Blueprint, request, jsonify
 from infrastructure.web.whatsapp_agent import procesar_mensaje
 from infrastructure.web.whatsapp_sender import enviar_mensaje
@@ -46,6 +47,20 @@ def _handle_twilio():
 mensajes_procesados: set = set()
 
 
+def _obtener_modo(phone: str) -> str:
+    try:
+        base_url = os.getenv('API_BASE_URL', 'http://localhost:5000')
+        headers  = {'X-Agent-Key': os.getenv('AGENT_API_KEY')}
+        r = requests.get(
+            f'{base_url}/api/agent/conversation-mode/{phone}',
+            headers=headers,
+            timeout=3
+        )
+        return r.json().get('mode', 'bot')
+    except Exception:
+        return 'bot'  # por defecto siempre responde el bot
+
+
 def _handle_meta():
     data = request.get_json()
     try:
@@ -56,46 +71,81 @@ def _handle_meta():
         if not messages:
             return jsonify({'status': 'ok'}), 200
 
-        mensaje = messages[0]
-
-        # Ignorar mensajes que no sean de texto (audio, imagen, etc.)
-        if mensaje.get('type') != 'text':
-            logger.info(f"[META] Mensaje no-texto ignorado: {mensaje.get('type')}")
+        # Ignorar mensajes viejos
+        timestamp = int(messages[0].get('timestamp', 0))
+        ahora = int(datetime.now().timestamp())
+        if ahora - timestamp > 30:
             return jsonify({'status': 'ok'}), 200
 
-        # Deduplicar por message_id
-        wamid = mensaje.get('id', '')
-        if wamid in mensajes_procesados:
-            logger.info(f"[META] Duplicado ignorado: {wamid}")
+        # Deduplicar
+        message_id = messages[0].get('id')
+        if message_id in mensajes_procesados:
             return jsonify({'status': 'ok'}), 200
-        mensajes_procesados.add(wamid)
+        mensajes_procesados.add(message_id)
 
-        # Limpiar el set si crece mucho
-        if len(mensajes_procesados) > 1000:
-            mensajes_procesados.clear()
+        # Solo mensajes de texto
+        if messages[0].get('type') != 'text':
+            return jsonify({'status': 'ok'}), 200
 
-        mensaje_entrante = mensaje['text']['body'].strip()
-        numero_cliente   = mensaje['from']
+        mensaje_entrante = messages[0]['text']['body'].strip()
+        numero_cliente   = messages[0]['from']
 
-        logger.info(f"[META] Mensaje de {numero_cliente}: {mensaje_entrante[:60]}")
+        # ── Verificar modo ──────────────────────────────
+        modo = _obtener_modo(numero_cliente)
 
+        if modo == 'human':
+            # No responde el bot, solo registra que llegó el mensaje
+            logger.info(f"Mensaje en modo HUMAN de {numero_cliente}: {mensaje_entrante}")
+            return jsonify({'status': 'ok'}), 200
+
+        # ── Modo bot: responder normalmente ─────────────
         respuesta_texto = procesar_mensaje(
             numero=numero_cliente,
             mensaje=mensaje_entrante
         )
 
-        logger.info(f"[META] Respuesta generada para {numero_cliente}: {respuesta_texto[:80]}")
+        # Si el cliente pidió asesor, cambiar modo a human
+        if respuesta_texto == 'SOLICITA_ASESOR':
+            _cambiar_modo(numero_cliente, 'human')
+            respuesta_texto = _manejar_asesor_webhook(numero_cliente)
 
-        exito = enviar_mensaje(numero_cliente, respuesta_texto)
-        if not exito:
-            logger.error(f"[META] FALLO al enviar respuesta a {numero_cliente}")
+        enviar_mensaje(numero_cliente, respuesta_texto)
 
-    except Exception as e:
-        # ← antes era (KeyError, IndexError): pass — tragaba errores silenciosamente
-        logger.error(f"[META] Error inesperado: {e}", exc_info=True)
+    except (KeyError, IndexError) as e:
+        logger.error(f"Error procesando webhook Meta: {e}")
 
     return jsonify({'status': 'ok'}), 200
 
+
+def _cambiar_modo(phone: str, mode: str) -> None:
+    try:
+        base_url = os.getenv('API_BASE_URL', 'http://localhost:5000')
+        headers  = {
+            'X-Agent-Key':  os.getenv('AGENT_API_KEY'),
+            'Content-Type': 'application/json'
+        }
+        requests.put(
+            f'{base_url}/api/agent/conversation-mode/{phone}',
+            json={'mode': mode, 'updated_by': 'bot'},
+            headers=headers,
+            timeout=3
+        )
+    except Exception as e:
+        logger.error(f"Error cambiando modo: {e}")
+
+
+def _manejar_asesor_webhook(phone: str) -> str:
+    numero_asesor = os.getenv('ASESOR_WHATSAPP', '')
+    if numero_asesor:
+        return (
+            f"¡Claro! 😊 Te conecto con una de nuestras asesoras ahora mismo.\n\n"
+            f"📲 También puedes escribirnos aquí: wa.me/{numero_asesor}\n\n"
+            f"En breve alguien de nuestro equipo te atenderá 💜"
+        )
+    return (
+        f"¡Claro! 😊 Te voy a conectar con una de nuestras asesoras.\n\n"
+        f"En breve alguien de nuestro equipo te atenderá personalmente 💜"
+    )
 
 # ─────────────────────────────────────────
 # Verificación GET para Meta
@@ -104,8 +154,6 @@ def _handle_meta():
 def whatsapp_verify():
     token = request.args.get('hub.verify_token')
     expected = os.getenv('META_VERIFY_TOKEN')
-    print(f"TOKEN RECIBIDO: {token}")
-    print(f"TOKEN ESPERADO: {expected}")
     if token == expected:
         return request.args.get('hub.challenge'), 200
     return 'Token inválido', 403
