@@ -724,14 +724,12 @@ def procesar_mensaje(numero: str, mensaje: str) -> str:
         fecha_dt = f"{estado['pending_date']}T{hora_fmt}:00"
         _guardar_mensaje(phone, 'user', f"[CTX:HORARIO_ELEGIDO] Fecha y hora: {fecha_dt}")
         _guardar_estado(phone, pending_date=None, current_step='resumen')
-        historial = _cargar_historial(phone)
-        # Cae al LLM para el resumen
 
-    # ── NUEVO: Si no hay servicio confirmado aún, saluda y muestra categorías ─
-    if not estado.get('selected_service_id') or estado.get('current_step') == 'eligiendo_servicio':
-        es_primer_mensaje = len(historial) == 0
-        
-        # Verificar si es cliente conocido
+    # ── Recargar estado antes de decidir si mostrar menú ─────────────────────
+    estado = _cargar_estado(phone)  # ← AGREGAR ESTA LÍNEA
+
+    # ── Si no hay servicio confirmado aún, saluda y muestra categorías ────────
+    if not estado.get('selected_service_id') and estado.get('current_step') not in ['recolectando_datos', 'resumen']:
         saludo = "¡Hola! 😊 Bienvenida a Seremyc Sthetic 💜\n\n¿Qué tipo de servicio te interesa hoy?"
         try:
             r = requests.get(
@@ -747,13 +745,12 @@ def procesar_mensaje(numero: str, mensaje: str) -> str:
         except Exception:
             pass
 
-        if es_primer_mensaje or mensaje_lower not in MAPA_CAT:
-            from infrastructure.web.whatsapp_sender import enviar_mensaje
-            _guardar_mensaje(phone, 'user', mensaje)
-            _guardar_mensaje(phone, 'assistant', saludo)
-            enviar_mensaje(phone, saludo)
-            _enviar_menu_categorias(phone)
-            return ''
+        from infrastructure.web.whatsapp_sender import enviar_mensaje
+        _guardar_mensaje(phone, 'user', mensaje)
+        _guardar_mensaje(phone, 'assistant', saludo)
+        enviar_mensaje(phone, saludo)
+        _enviar_menu_categorias(phone)
+        return ''
 
     # ── Flujo LLM — solo para recolección de datos y agendamiento ────────────
     system = _construir_system(servicios_raw)
