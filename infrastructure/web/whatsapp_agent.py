@@ -15,19 +15,15 @@ conversaciones: dict[str, list] = {}
 ultima_categoria: dict[str, str] = {}
 servicios_categoria: dict[str, list] = {}
 
-MAX_HISTORIAL = 10  # ← reducido de 20 a 10
+MAX_HISTORIAL = 20
 
 CATEGORIAS = ['facial', 'corporal', 'capilar', 'sueroterapia', 'masaje']
 
-# ─────────────────────────────────────────
-# CACHÉ DE SERVICIOS (nuevo)
-# ─────────────────────────────────────────
 _cache_servicios: dict = {'data': [], 'ts': 0.0}
-_CACHE_TTL = 300  # 5 minutos
+_CACHE_TTL = 300
 
 
 def _obtener_servicios_raw() -> list:
-    """Obtiene servicios con caché de 5 minutos para evitar llamadas repetidas."""
     if time() - _cache_servicios['ts'] < _CACHE_TTL and _cache_servicios['data']:
         return _cache_servicios['data']
     try:
@@ -43,94 +39,101 @@ def _obtener_servicios_raw() -> list:
         return data
     except Exception as e:
         logger.error(f"Error obteniendo servicios: {e}")
-        return _cache_servicios['data']  # devuelve caché viejo si falla
+        return _cache_servicios['data']
 
 
 def _obtener_servicios_texto(servicios_raw: list) -> str:
-    """Recibe servicios_raw ya obtenido para evitar doble llamada."""
     if not servicios_raw:
-        return "Servicios disponibles: consultar con la asistente."
+        return "Servicios: consultar con asesora."
 
     categorias: dict[str, list] = {}
     for s in servicios_raw:
         cat = s.get('category', 'otro').lower().strip()
         categorias.setdefault(cat, [])
-        duracion = (
-            f"{s['duration_minutes'] // 60}h {s['duration_minutes'] % 60}min"
-            if s['duration_minutes'] >= 60
-            else f"{s['duration_minutes']} min"
-        )
+        mins = s['duration_minutes']
+        duracion = f"{mins//60}h{mins%60:02d}m" if mins >= 60 else f"{mins}min"
         categorias[cat].append(
-            f"  - {s['name']} (ID: {s['id']}) - {duracion} - ${float(s['price']):,.0f}"
+            f"- {s['name']} (ID:{s['id']}) {duracion} ${float(s['price']):,.0f}"
         )
 
-    texto = "SERVICIOS POR CATEGORÍA:\n\n"
+    texto = "SERVICIOS:\n"
     for cat, items in categorias.items():
-        texto += f"CATEGORÍA {cat.upper()}:\n"
-        texto += "\n".join(items)
-        texto += "\n\n"
-
+        texto += f"{cat.upper()}:\n" + "\n".join(items) + "\n"
     return texto
 
 
-SYSTEM_PROMPT = """Eres la asistente virtual de Seremyc Sthetic, un centro de bienestar y estética.
-Tu nombre es Sere.
+SYSTEM_PROMPT = """Eres Sere, asistente virtual de Seremyc Sthetic 💜 — centro de bienestar y estética.
 
-REGLAS CRÍTICAS — NUNCA VIOLAR:
-1. NUNCA muestres "CONSULTAR_DISPONIBILIDAD:..." al cliente. Es una instrucción interna.
-2. NUNCA inventes horarios. Solo usa los que el sistema te proporciona.
-3. NUNCA muestres "AGENDAR_CITA:..." al cliente. Es una instrucción interna.
-4. Tus respuestas NUNCA deben superar 300 palabras.
-5. Nunca listes servicios por tu cuenta, el sistema lo hace automáticamente.
+═══ PERSONALIDAD ═══
+- Cálida, empática, profesional. Como una amiga experta en bienestar.
+- Mensajes cortos (máx 120 palabras). Uno o dos emojis por mensaje.
+- Siempre en español. Nunca uses tecnicismos innecesarios.
+- Si el cliente está indeciso, ayúdale con una recomendación amable.
 
-MANEJO DE FECHAS:
-- Hoy es {fecha_actual}.
-- Convierte fechas en lenguaje natural a formato exacto.
-- Fechas de nacimiento: DD/MM/YYYY
-- Fechas de cita: YYYY-MM-DDTHH:MM:00
+═══ REGLAS ABSOLUTAS ═══
+1. JAMÁS muestres "CONSULTAR_DISPONIBILIDAD:..." ni "AGENDAR_CITA:..." al cliente.
+2. JAMÁS inventes horarios, fechas ni datos. Solo usa lo que el sistema provee.
+3. JAMÁS omitas ni cambies datos que el cliente proporcionó.
+4. Si el cliente pide hablar con un asesor humano, responde: "CONTACTAR_ASESOR"
+5. Cuando detectes el día deseado para la cita, emite SOLO: CONSULTAR_DISPONIBILIDAD:{"fecha":"YYYY-MM-DD"}
+6. Cuando tengas confirmación final, emite SOLO: AGENDAR_CITA:{...json...}
 
-HERRAMIENTA INTERNA — CONSULTAR_DISPONIBILIDAD:
-Cuando el cliente indique un día para su cita, responde ÚNICAMENTE con esto (sin texto adicional):
-CONSULTAR_DISPONIBILIDAD:{"fecha":"YYYY-MM-DD"}
-El sistema te devolverá los horarios reales y deberás mostrárselos al cliente.
-NUNCA inventes horarios. NUNCA pongas texto antes o después del token.
+═══ FECHAS ═══
+Hoy: {fecha_actual}
+- Nacimiento → DD/MM/YYYY
+- Cita → YYYY-MM-DDTHH:MM:00
+- "mañana", "el viernes", "próxima semana" → calcula la fecha exacta
 
-FLUJO DE CONVERSACIÓN:
+═══ FLUJO ═══
 
-PASO 1 — BIENVENIDA:
-Saluda amablemente y brevemente con tu nombre y muestra las categorías:
+[PASO 1 - BIENVENIDA]
+Saluda con tu nombre y presenta las opciones:
 "¿Qué tipo de servicio te interesa? 🌸
-1️⃣ Facial
-2️⃣ Corporal
-3️⃣ Capilar
-4️⃣ Sueroterapia
-5️⃣ Masaje"
+1️⃣ Facial  2️⃣ Corporal  3️⃣ Capilar  4️⃣ Sueroterapia  5️⃣ Masaje
+_(Escribe el número o el nombre)_"
 
-PASO 2 — SERVICIO ELEGIDO:
-Cuando el cliente elija un servicio confirma:
-"¿Confirmas que quieres agendar [nombre del servicio]? 😊"
+[PASO 2 - CONFIRMAR SERVICIO]
+Al elegir: "¿Confirmás que querés agendar *[servicio]*? 😊
+💰 $[precio] · ⏱ [duración]"
 
-PASO 3 — RECOLECTAR DATOS (uno por uno):
-1. Nombre completo
-2. Correo electrónico
-3. Fecha de nacimiento (DD/MM/YYYY)
-4. Dirección
-5. Tipo de piel (normal, seca, mixta, grasa, sensible)
-6. Alergias (o "ninguna")
-7. Observaciones adicionales
-8. Día deseado → responde ÚNICAMENTE con CONSULTAR_DISPONIBILIDAD:{"fecha":"YYYY-MM-DD"}
-9. Cliente elige horario → guarda como YYYY-MM-DDTHH:MM:00
+[PASO 3 - DATOS] Pide uno por uno con naturalidad:
+① Nombre completo
+② Correo electrónico  
+③ Fecha de nacimiento (DD/MM/YYYY)
+④ Dirección
+⑤ Tipo de piel (normal/seca/mixta/grasa/sensible)
+⑥ Alergias (o "ninguna")
+⑦ Observaciones (o "ninguna")
+⑧ Día deseado → emite CONSULTAR_DISPONIBILIDAD:{"fecha":"YYYY-MM-DD"}
+⑨ Cliente elige horario → guarda YYYY-MM-DDTHH:MM:00
 
-PASO 4 — CONFIRMAR:
-Muestra resumen completo con TODOS los datos y pregunta si son correctos.
-Asegúrate de incluir el correo electrónico en el resumen.
+[PASO 4 - RESUMEN]
+Muestra EXACTAMENTE los datos que el cliente dio, sin cambiar nada:
+"📋 *Resumen de tu cita:*
+👤 [nombre exacto del cliente]
+📧 [correo exacto]
+🎂 [fecha nacimiento exacta]
+🏠 [dirección exacta]
+🧴 Piel: [tipo exacto] · Alergias: [exacto]
+💆 [servicio]
+📅 [fecha y hora]
+💰 $[precio]
 
-PASO 5 — AGENDAR:
-Solo cuando el cliente confirme con "sí", responde ÚNICAMENTE con esto (sin texto adicional):
-AGENDAR_CITA:{"nombre":"...","correo":"...","fecha_nacimiento":"...","direccion":"...","tipo_piel":"...","alergias":"...","observaciones":"...","servicio_id":ID_NUMERICO,"fecha_cita":"YYYY-MM-DDTHH:MM:00"}
+¿Todo correcto? ✅"
 
-IMPORTANTE: servicio_id debe ser un número entero, no texto.
-IMPORTANTE: correo debe ser el que el cliente proporcionó, nunca vacío."""
+[PASO 5 - AGENDAR]
+Solo si el cliente confirma, emite ÚNICAMENTE:
+AGENDAR_CITA:{"nombre":"...","correo":"...","fecha_nacimiento":"...","direccion":"...","tipo_piel":"...","alergias":"...","observaciones":"...","servicio_id":ID,"fecha_cita":"YYYY-MM-DDTHH:MM:00"}
+
+═══ CONTACTO ASESOR ═══
+Si el cliente escribe "asesor", "humano", "persona", "hablar con alguien" o similar:
+Responde SOLO: CONTACTAR_ASESOR
+
+═══ DATOS DEL NEGOCIO ═══
+📍 Seremyc Sthetic — Centro de bienestar y estética
+📞 Para dudas adicionales puedes escribirnos directamente.
+
+{servicios}"""
 
 
 def _normalizar_numero(numero: str) -> str:
@@ -153,7 +156,6 @@ def _verificar_disponibilidad(fecha_cita: str) -> bool:
         dt = datetime.fromisoformat(fecha_cita)
         fecha = dt.strftime('%Y-%m-%d')
         hora_solicitada = dt.strftime('%H:00')
-
         r = requests.get(
             f'{_base_url()}/api/agent/availability',
             params={'date': fecha},
@@ -163,7 +165,6 @@ def _verificar_disponibilidad(fecha_cita: str) -> bool:
         r.raise_for_status()
         horas_libres = [s['label'] for s in r.json().get('available', [])]
         return hora_solicitada in horas_libres
-
     except Exception as e:
         logger.error(f"Error verificando disponibilidad: {e}")
         return True
@@ -177,22 +178,19 @@ def _respuesta_categoria(numero: str, categoria: str, servicios_raw: list) -> st
 
     if not filtrados:
         return (
-            f"Lo siento, no encontré servicios en la categoría {categoria}. 😔\n"
-            f"¿Te gustaría ver otra categoría?"
+            f"Hmm, no encontré servicios de {categoria} en este momento 😔\n"
+            f"¿Te interesa otra categoría? Puedo mostrarte las opciones disponibles 🌸"
         )
 
     servicios_categoria[numero] = filtrados
 
-    texto = f"🌸 Servicios de {categoria.capitalize()}:\n\n"
+    texto = f"🌸 *Servicios de {categoria.capitalize()}:*\n\n"
     for i, s in enumerate(filtrados, 1):
-        duracion = (
-            f"{s['duration_minutes'] // 60}h {s['duration_minutes'] % 60}min"
-            if s['duration_minutes'] >= 60
-            else f"{s['duration_minutes']} min"
-        )
-        texto += f"{i}️⃣ {s['name']} - {duracion} - ${float(s['price']):,.0f}\n"
+        mins = s['duration_minutes']
+        duracion = f"{mins//60}h {mins%60:02d}min" if mins >= 60 else f"{mins} min"
+        texto += f"{i}️⃣ *{s['name']}*\n   ⏱ {duracion} · 💰 ${float(s['price']):,.0f}\n\n"
 
-    texto += "\n¿Cuál te gustaría agendar? Escribe el número o el nombre 😊"
+    texto += "¿Cuál te gustaría agendar? Escribe el número o el nombre 😊"
     return texto
 
 
@@ -214,19 +212,26 @@ def _slots_disponibles(fecha: str) -> list[str]:
 def _formatear_slots(fecha: str, slots: list[str]) -> str:
     try:
         dt = datetime.strptime(fecha, '%Y-%m-%d')
-        fecha_legible = dt.strftime('%A %d de %B de %Y')
+        dias = ['lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado', 'domingo']
+        meses = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio',
+                 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre']
+        fecha_legible = f"{dias[dt.weekday()]} {dt.day} de {meses[dt.month-1]}"
     except ValueError:
         fecha_legible = fecha
 
     if not slots:
         return (
-            f"😔 Lo siento, no hay horarios disponibles para el {fecha_legible}.\n"
-            f"¿Te gustaría elegir otro día?"
+            f"😔 No hay horarios disponibles para el {fecha_legible}.\n"
+            f"¿Te gustaría elegir otro día? Puedo ayudarte a encontrar uno 🗓"
         )
 
-    opciones = "\n".join(f"  {i + 1}️⃣ {h}" for i, h in enumerate(slots))
+    emojis = ['1️⃣','2️⃣','3️⃣','4️⃣','5️⃣','6️⃣','7️⃣','8️⃣','9️⃣','🔟']
+    opciones = "\n".join(
+        f"{emojis[i] if i < len(emojis) else '▪️'} {h}"
+        for i, h in enumerate(slots)
+    )
     return (
-        f"📅 Horarios disponibles para el {fecha_legible}:\n\n"
+        f"📅 *Horarios disponibles — {fecha_legible}:*\n\n"
         f"{opciones}\n\n"
         f"¿Cuál te queda mejor? 😊"
     )
@@ -255,6 +260,23 @@ def _obtener_historial_cliente(numero: str) -> dict:
         return {'exists': False}
 
 
+def _manejar_asesor(numero: str) -> str:
+    """Respuesta cuando el cliente quiere hablar con un asesor humano."""
+    numero_asesor = os.getenv('ASESOR_WHATSAPP', '')
+    if numero_asesor:
+        return (
+            f"¡Claro! 😊 Te conecto con una de nuestras asesoras.\n\n"
+            f"📲 Escríbenos directamente aquí:\n"
+            f"wa.me/{numero_asesor}\n\n"
+            f"También puedes seguir chateando conmigo si prefieres 💜"
+        )
+    return (
+        f"¡Por supuesto! 😊 Una de nuestras asesoras estará encantada de ayudarte.\n\n"
+        f"📲 Escríbenos directamente y te atendemos de inmediato.\n\n"
+        f"También puedo seguir ayudándote por aquí si lo prefieres 💜"
+    )
+
+
 def _manejar_confirmacion_cita(numero: str, accion: str) -> str:
     try:
         phone = _normalizar_numero(numero)
@@ -267,16 +289,19 @@ def _manejar_confirmacion_cita(numero: str, accion: str) -> str:
         data = r.json()
 
         if not data.get('exists'):
-            return "No encontré citas asociadas a tu número. 😔"
+            return (
+                "No encontré citas asociadas a tu número 😔\n"
+                "¿Quieres agendar una nueva cita? Con gusto te ayudo 🌸"
+            )
 
         citas = data.get('appointments', [])
-        proxima = next(
-            (c for c in citas if c['status'] == 'confirmed'),
-            None
-        )
+        proxima = next((c for c in citas if c['status'] == 'confirmed'), None)
 
         if not proxima:
-            return "No tienes citas confirmadas próximas. 😔"
+            return (
+                "No tienes citas confirmadas próximas 😔\n"
+                "¿Quieres agendar una? 🌸"
+            )
 
         nombre = data['full_name'].split()[0]
 
@@ -285,7 +310,7 @@ def _manejar_confirmacion_cita(numero: str, accion: str) -> str:
                 f"✅ ¡Perfecto {nombre}! Tu cita está confirmada.\n\n"
                 f"💆 {proxima['service']}\n"
                 f"📅 {proxima['scheduled_at']}\n\n"
-                f"¡Te esperamos en Seremyc Sthetic! 💜"
+                f"¡Te esperamos con mucho cariño! 💜"
             )
         elif accion == 'cancelar':
             requests.patch(
@@ -294,26 +319,26 @@ def _manejar_confirmacion_cita(numero: str, accion: str) -> str:
                 timeout=10
             )
             return (
-                f"😔 Entendido {nombre}, hemos cancelado tu cita.\n\n"
+                f"Entendido {nombre}, cancelamos tu cita 😔\n\n"
                 f"💆 {proxima['service']}\n"
                 f"📅 {proxima['scheduled_at']}\n\n"
-                f"Si deseas reagendar, escribe *REAGENDAR* cuando quieras. 🌸"
+                f"Cuando quieras reagendar, aquí estaré 🌸"
             )
         elif accion == 'reagendar':
             contexto = (
-                f"El cliente quiere reagendar su cita de {proxima['service']}. "
-                f"ID cita: {proxima.get('id')}. "
-                f"Pregúntale qué día prefiere."
+                f"[REAGENDAR] Servicio: {proxima['service']} | "
+                f"ID cita: {proxima.get('id')} | "
+                f"Pregunta qué día prefiere para la nueva cita."
             )
             _agregar_mensaje(numero, 'user', contexto)
             return (
-                f"¡Claro {nombre}! Vamos a reagendar tu cita de *{proxima['service']}*. 🗓️\n\n"
-                f"¿Qué día te quedaría mejor?"
+                f"¡Claro {nombre}! Vamos a reagendar tu *{proxima['service']}* 🗓\n\n"
+                f"¿Qué día te vendría mejor?"
             )
 
     except Exception as e:
         logger.error(f"Error manejando acción {accion}: {e}")
-        return "Lo siento, ocurrió un error. Por favor contáctanos directamente. 😔"
+        return "Hubo un error procesando tu solicitud 😔 Por favor contáctanos directamente."
 
 
 def _guardar_calificacion(numero: str, calificacion: int) -> str | None:
@@ -349,13 +374,13 @@ def _guardar_calificacion(numero: str, calificacion: int) -> str | None:
         nombre = data['full_name'].split()[0]
         if calificacion >= 4:
             return (
-                f"¡Muchas gracias {nombre}! 🌟 Nos alegra que hayas tenido una gran experiencia.\n\n"
-                f"¿Quieres dejarnos algún comentario? 😊 (O escribe *NO*)"
+                f"¡Gracias {nombre}! 🌟 Nos alegra muchísimo saber que tuviste una gran experiencia.\n\n"
+                f"¿Quieres dejarnos algún comentario? 😊\n_(Escribe NO si prefieres no hacerlo)_"
             )
         else:
             return (
-                f"Gracias {nombre} por tu honestidad. 🙏\n\n"
-                f"¿Nos puedes contar qué podríamos mejorar? 😔"
+                f"Gracias por tu honestidad {nombre} 🙏\n\n"
+                f"Nos importa mucho mejorar. ¿Qué podríamos hacer mejor para ti? 💜"
             )
 
     except Exception as e:
@@ -364,21 +389,56 @@ def _guardar_calificacion(numero: str, calificacion: int) -> str | None:
 
 
 def _extraer_token(texto: str, token: str) -> str | None:
-    """Extrae el JSON de un token como CONSULTAR_DISPONIBILIDAD: o AGENDAR_CITA:"""
     if token not in texto:
         return None
     parte = texto.split(token)[1].strip()
-    linea = parte.split('\n')[0].strip()
-    return linea
+    # Extraer hasta cierre del JSON
+    if parte.startswith('{'):
+        depth = 0
+        for i, ch in enumerate(parte):
+            if ch == '{':
+                depth += 1
+            elif ch == '}':
+                depth -= 1
+                if depth == 0:
+                    return parte[:i+1]
+    return parte.split('\n')[0].strip()
+
+
+def _llamar_llm(system: str, mensajes: list, max_tokens: int = 500) -> str:
+    """Centraliza las llamadas al LLM."""
+    respuesta = client.messages.create(
+        model='claude-haiku-4-5-20251001',
+        max_tokens=max_tokens,
+        system=system,
+        messages=mensajes
+    )
+    return respuesta.content[0].text
+
+
+def _construir_system(servicios_raw: list) -> str:
+    fecha_actual = datetime.now().strftime('%A %d de %B de %Y')
+    servicios_texto = _obtener_servicios_texto(servicios_raw)
+    return (
+        SYSTEM_PROMPT
+        .replace('{fecha_actual}', fecha_actual)
+        .replace('{servicios}', servicios_texto)
+    )
 
 
 def procesar_mensaje(numero: str, mensaje: str) -> str:
 
     mensaje_lower = mensaje.lower().strip()
 
-    # Detectar acciones especiales
+    # ── Acciones especiales ─────────────────────────────────────────────────
     if mensaje_lower in ['confirmar', 'cancelar', 'reagendar']:
         return _manejar_confirmacion_cita(numero, mensaje_lower)
+
+    # Detectar solicitud de asesor
+    palabras_asesor = ['asesor', 'asesora', 'humano', 'persona', 'hablar con alguien',
+                       'agente', 'representante', 'ayuda humana']
+    if any(p in mensaje_lower for p in palabras_asesor):
+        return _manejar_asesor(numero)
 
     # Detectar calificación de encuesta
     if mensaje_lower in ['1', '2', '3', '4', '5']:
@@ -387,48 +447,44 @@ def procesar_mensaje(numero: str, mensaje: str) -> str:
             return resultado
 
     es_primer_mensaje = numero not in conversaciones
-
-    # ← UNA sola llamada a servicios por request
     servicios_raw = _obtener_servicios_raw()
 
-    # Inyectar historial si es el primer mensaje
+    # ── Primer mensaje: inyectar contexto del cliente ───────────────────────
     if es_primer_mensaje:
         historial = _obtener_historial_cliente(numero)
         if historial.get('exists'):
             citas = historial.get('appointments', [])
             ultimo_servicio = citas[0]['service'] if citas else None
             contexto = (
-                f"[CONTEXTO] Cliente conocido: {historial['full_name']}. "
-                f"Último servicio: {ultimo_servicio or 'ninguno'}. "
-                f"Salúdalo por su nombre mencionando su último servicio. [FIN CONTEXTO]"
+                f"[CTX:CLIENTE_CONOCIDO] "
+                f"Nombre: {historial['full_name']} | "
+                f"Último servicio: {ultimo_servicio or 'ninguno'} | "
+                f"Salúdalo por su nombre y menciona su último servicio de forma natural."
             )
             _agregar_mensaje(numero, 'user', contexto)
 
-    # Detectar selección de servicio por número
+    # ── Selección de servicio por número ────────────────────────────────────
     if mensaje_lower.strip().isdigit() and numero in servicios_categoria:
         idx = int(mensaje_lower.strip()) - 1
         servicios_mostrados = servicios_categoria[numero]
         if 0 <= idx < len(servicios_mostrados):
             servicio = servicios_mostrados[idx]
-            duracion = servicio.get('duration_minutes', 0)
+            mins = servicio.get('duration_minutes', 0)
+            duracion = f"{mins//60}h {mins%60:02d}min" if mins >= 60 else f"{mins} min"
             respuesta = (
-                f"¿Confirmas que quieres agendar *{servicio['name']}*? 😊\n\n"
-                f"💰 Precio: ${float(servicio['price']):,.0f}\n"
-                f"⏱️ Duración: {duracion} min"
+                f"¿Confirmás que querés agendar *{servicio['name']}*? 😊\n\n"
+                f"💰 ${float(servicio['price']):,.0f} · ⏱ {duracion}"
             )
             contexto_servicio = (
-                f"[SERVICIO SELECCIONADO] "
-                f"Nombre: {servicio['name']} | "
-                f"ID: {servicio['id']} | "
-                f"Precio: ${float(servicio['price']):,.0f} | "
-                f"Duración: {duracion} min "
-                f"[FIN SERVICIO]"
+                f"[CTX:SERVICIO] "
+                f"Nombre: {servicio['name']} | ID: {servicio['id']} | "
+                f"Precio: ${float(servicio['price']):,.0f} | Duración: {mins}min"
             )
             _agregar_mensaje(numero, 'user', contexto_servicio)
             _agregar_mensaje(numero, 'assistant', respuesta)
             return respuesta
 
-    # Detectar selección de categoría
+    # ── Selección de categoría ───────────────────────────────────────────────
     categoria_detectada = None
     mapa_numeros = {
         '1': 'facial', '2': 'corporal', '3': 'capilar',
@@ -448,27 +504,18 @@ def procesar_mensaje(numero: str, mensaje: str) -> str:
         _agregar_mensaje(numero, 'assistant', respuesta)
         return respuesta
 
-    # Flujo normal con el LLM
-    fecha_actual = datetime.now().strftime('%A %d de %B de %Y')
-
-    # ← reutiliza servicios_raw ya obtenido, sin segunda llamada
-    servicios_texto = _obtener_servicios_texto(servicios_raw)
-
-    system = (
-        SYSTEM_PROMPT.replace('{fecha_actual}', fecha_actual)
-        + f"\n\n{servicios_texto}"
-    )
-
+    # ── Flujo LLM ────────────────────────────────────────────────────────────
+    system = _construir_system(servicios_raw)
     _agregar_mensaje(numero, 'user', mensaje)
 
-    respuesta_llm = client.messages.create(
-        model='claude-haiku-4-5-20251001',
-        max_tokens=400,  # ← reducido de 1000 a 400
-        system=system,
-        messages=conversaciones[numero]
-    )
-    texto_respuesta = respuesta_llm.content[0].text
+    texto_respuesta = _llamar_llm(system, conversaciones[numero])
     _agregar_mensaje(numero, 'assistant', texto_respuesta)
+
+    # Interceptar CONTACTAR_ASESOR
+    if 'CONTACTAR_ASESOR' in texto_respuesta:
+        respuesta_asesor = _manejar_asesor(numero)
+        conversaciones[numero][-1]['content'] = respuesta_asesor
+        return respuesta_asesor
 
     # Interceptar CONSULTAR_DISPONIBILIDAD
     if 'CONSULTAR_DISPONIBILIDAD:' in texto_respuesta:
@@ -491,33 +538,30 @@ def _manejar_consulta_disponibilidad(numero: str, texto: str, system: str) -> st
         datos = json.loads(json_str)
         fecha = datos['fecha']
     except Exception as e:
-        logger.error(f"Token CONSULTAR_DISPONIBILIDAD malformado: {e} — texto: {texto}")
-        respuesta_error = "Lo siento, tuve un problema consultando la disponibilidad. ¿Puedes repetirme el día? 😔"
+        logger.error(f"CONSULTAR_DISPONIBILIDAD malformado: {e} — {texto}")
+        respuesta_error = "Tuve un problema consultando la disponibilidad 😔 ¿Me repites el día?"
         conversaciones[numero][-1]['content'] = respuesta_error
         return respuesta_error
 
     slots = _slots_disponibles(fecha)
     resultado_tool = _formatear_slots(fecha, slots)
 
-    conversaciones[numero][-1]['content'] = f"[Consulté disponibilidad para {fecha}]"
+    # Reemplazar token en historial
+    conversaciones[numero][-1]['content'] = f"[Consulté disponibilidad: {fecha}]"
 
-    tool_result_msg = {
+    tool_msg = {
         'role': 'user',
         'content': (
-            f"[RESULTADO DISPONIBILIDAD para {fecha}]\n"
-            f"{resultado_tool}\n"
-            f"[FIN RESULTADO]\n\n"
-            f"Muestra estos horarios al cliente tal como están, sin inventar ni agregar horarios."
+            f"[SISTEMA] Disponibilidad para {fecha}:\n{resultado_tool}\n"
+            f"Muestra estos horarios al cliente exactamente como están."
         )
     }
 
-    respuesta_llm2 = client.messages.create(
-        model='claude-haiku-4-5-20251001',
-        max_tokens=400,  # ← reducido de 500 a 400
-        system=system,
-        messages=conversaciones[numero] + [tool_result_msg]
+    respuesta_final = _llamar_llm(
+        system,
+        conversaciones[numero] + [tool_msg],
+        max_tokens=300
     )
-    respuesta_final = respuesta_llm2.content[0].text
     _agregar_mensaje(numero, 'assistant', respuesta_final)
     return respuesta_final
 
@@ -526,9 +570,8 @@ def _agendar_cita(numero: str, texto: str) -> str:
     try:
         json_str = _extraer_token(texto, 'AGENDAR_CITA:')
         if not json_str:
-            raise ValueError("Token AGENDAR_CITA no encontrado")
+            raise ValueError("Token no encontrado")
         datos = json.loads(json_str)
-
         datos['servicio_id'] = int(datos['servicio_id'])
 
         headers = _obtener_headers()
@@ -546,12 +589,12 @@ def _agendar_cita(numero: str, texto: str) -> str:
             slots = [s['label'] for s in r.json().get('available', [])]
             slots_texto = ', '.join(slots[:5]) if slots else 'ninguno disponible'
             return (
-                f"😔 Lo siento, el horario {dt.strftime('%d/%m/%Y %H:%M')} ya está ocupado.\n\n"
-                f"⏰ Horarios disponibles: {slots_texto}\n\n"
-                f"¿Te gustaría alguno de estos?"
+                f"😔 El horario {dt.strftime('%d/%m/%Y %H:%M')} ya está ocupado.\n\n"
+                f"⏰ Horarios libres ese día: {slots_texto}\n\n"
+                f"¿Cuál te viene mejor?"
             )
 
-        # Crear o actualizar cliente
+        # Crear cliente
         r_cliente = requests.post(
             f'{_base_url()}/api/agent/clients',
             json={
@@ -591,24 +634,21 @@ def _agendar_cita(numero: str, texto: str) -> str:
         conversaciones.pop(numero, None)
 
         return (
-            f"✅ ¡Tu cita ha sido agendada exitosamente!\n\n"
-            f"📋 Resumen:\n"
+            f"✅ *¡Tu cita está confirmada!*\n\n"
             f"👤 {cita['client']}\n"
             f"💆 {cita['service']}\n"
             f"📅 {datos['fecha_cita']}\n"
             f"💰 ${float(cita['price']):,.0f}\n\n"
-            f"Te esperamos en Seremyc Sthetic 💜"
+            f"¡Te esperamos con mucho cariño en Seremyc Sthetic! 💜\n"
+            f"Si necesitas algo más, aquí estaré 🌸"
         )
 
     except json.JSONDecodeError as e:
-        logger.error(f"JSON inválido en AGENDAR_CITA: {e} — texto: {texto}")
-        return (
-            "Lo siento, hubo un problema procesando los datos. 😔\n"
-            "Por favor intenta de nuevo."
-        )
+        logger.error(f"JSON inválido AGENDAR_CITA: {e} — {texto}")
+        return "Hubo un problema procesando tu cita 😔 ¿Intentamos de nuevo?"
     except Exception as e:
-        logger.error(f"Error agendando cita para {numero}: {e}")
+        logger.error(f"Error agendando cita {numero}: {e}")
         return (
-            "Lo siento, ocurrió un error al agendar tu cita 😔\n"
-            "Por favor intenta de nuevo o contáctanos directamente."
+            "Ocurrió un error al agendar 😔\n"
+            "Por favor intenta de nuevo o escribe *asesor* para que te ayude una de nosotras 💜"
         )

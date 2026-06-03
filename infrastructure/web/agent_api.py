@@ -2,6 +2,7 @@ from flask import Blueprint, request, jsonify
 from datetime import datetime
 from functools import wraps
 import os
+from flask_jwt_extended import jwt_required
 
 # BASE DE DATOS
 from infrastructure.database.db import db
@@ -403,7 +404,7 @@ def get_conversation_mode(phone):
 # PUT cambiar modo de conversación
 # ─────────────────────────────────────────
 @agent_bp.route('/conversation-mode/<phone>', methods=['PUT'])
-@require_agent_key
+@jwt_required()
 def set_conversation_mode(phone):
     from infrastructure.database.models import ConversationModeModel
     data = request.get_json()
@@ -432,7 +433,7 @@ def set_conversation_mode(phone):
 # GET lista de conversaciones activas
 # ─────────────────────────────────────────
 @agent_bp.route('/conversations', methods=['GET'])
-@require_agent_key
+@jwt_required()
 def get_conversations():
     from infrastructure.database.models import ConversationModeModel, ClientModel
     modos = ConversationModeModel.query.order_by(
