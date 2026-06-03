@@ -4,6 +4,7 @@ import requests
 from flask import Blueprint, request, jsonify
 from infrastructure.web.whatsapp_agent import procesar_mensaje
 from infrastructure.web.whatsapp_sender import enviar_mensaje
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -92,7 +93,12 @@ def _handle_meta():
 
         # ── Verificar modo ──────────────────────────────
         modo = _obtener_modo(numero_cliente)
+        logger.info(f"Mensaje recibido de {numero_cliente}")
+        logger.info(f"Texto: {mensaje_entrante}")
 
+        modo = _obtener_modo(numero_cliente)
+
+        logger.info(f"Modo detectado: {modo}")
         if modo == 'human':
             # No responde el bot, solo registra que llegó el mensaje
             logger.info(f"Mensaje en modo HUMAN de {numero_cliente}: {mensaje_entrante}")
