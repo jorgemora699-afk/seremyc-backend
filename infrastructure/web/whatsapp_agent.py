@@ -769,9 +769,8 @@ def procesar_mensaje(numero: str, mensaje: str) -> str:
             f"NO preguntes de nuevo por el servicio."
         )
 
-    historial = _cargar_historial(phone)
     _guardar_mensaje(phone, 'user', mensaje)
-    historial.append({'role': 'user', 'content': mensaje})
+    historial = _cargar_historial(phone)  # recarga ya con el mensaje guardado
 
     texto_respuesta = _llamar_llm(system, historial)
 
