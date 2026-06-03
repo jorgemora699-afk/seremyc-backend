@@ -418,7 +418,7 @@ def get_conversation_mode(phone):
 # PUT cambiar modo de conversación
 # ─────────────────────────────────────────
 @agent_bp.route('/conversation-mode/<phone>', methods=['PUT'])
-@jwt_required()
+@require_agent_key
 def set_conversation_mode(phone):
     from infrastructure.database.models import ConversationModeModel
     data = request.get_json()
