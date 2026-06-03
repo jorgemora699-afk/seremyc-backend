@@ -85,11 +85,20 @@ def _handle_meta():
         mensajes_procesados.add(message_id)
 
         # Solo mensajes de texto
-        if messages[0].get('type') != 'text':
+        if messages[0].get('type') == 'text':
+            mensaje_entrante = messages[0]['text']['body'].strip()
+        elif messages[0].get('type') == 'interactive':
+            interactive = messages[0].get('interactive', {})
+            if interactive.get('type') == 'button_reply':
+                mensaje_entrante = interactive['button_reply']['id']
+            elif interactive.get('type') == 'list_reply':
+                mensaje_entrante = interactive['list_reply']['id']
+            else:
+                return jsonify({'status': 'ok'}), 200
+        else:
             return jsonify({'status': 'ok'}), 200
 
-        mensaje_entrante = messages[0]['text']['body'].strip()
-        numero_cliente   = messages[0]['from']
+        numero_cliente = messages[0]['from']
 
         # ── Verificar modo ──────────────────────────────
         modo = _obtener_modo(numero_cliente)

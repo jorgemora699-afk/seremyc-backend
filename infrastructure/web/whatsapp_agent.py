@@ -1,6 +1,6 @@
 """
 whatsapp_agent.py — Sere, agente de WhatsApp para Seremyc Sthetic
-Versión corregida: historial persistente en PostgreSQL, estado de sesión robusto.
+Versión con mensajes interactivos (botones y listas) para evitar ambigüedad.
 """
 
 import os
@@ -16,16 +16,11 @@ logger = logging.getLogger(__name__)
 
 groq_client = Groq(api_key=os.getenv('GROQ_API_KEY'))
 
-# ─── Caché de servicios (en RAM está bien, son datos estáticos) ──────────────
 _cache_servicios: dict = {'data': [], 'ts': 0.0}
 _CACHE_TTL = 300
 
-MAX_HISTORIAL = 24   # turnos a cargar desde BD
+MAX_HISTORIAL = 24
 CATEGORIAS = ['facial', 'corporal', 'capilar', 'sueroterapia', 'masaje']
-MAPA_NUMEROS_CAT = {
-    '1': 'facial', '2': 'corporal', '3': 'capilar',
-    '4': 'sueroterapia', '5': 'masaje'
-}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -48,11 +43,10 @@ def _normalizar_numero(numero: str) -> str:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# PERSISTENCIA DE HISTORIAL EN POSTGRESQL
+# PERSISTENCIA — HISTORIAL
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _cargar_historial(phone: str) -> list[dict]:
-    """Carga los últimos MAX_HISTORIAL mensajes desde la BD."""
     try:
         from infrastructure.database.db import db
         from sqlalchemy import text
@@ -65,7 +59,6 @@ def _cargar_historial(phone: str) -> list[dict]:
             """),
             {'phone': phone, 'limit': MAX_HISTORIAL}
         ).fetchall()
-        # Invertir para orden cronológico
         return [{'role': r[0], 'content': r[1]} for r in reversed(rows)]
     except Exception as e:
         logger.error(f"Error cargando historial {phone}: {e}")
@@ -73,7 +66,6 @@ def _cargar_historial(phone: str) -> list[dict]:
 
 
 def _guardar_mensaje(phone: str, role: str, content: str) -> None:
-    """Persiste un mensaje en la BD."""
     try:
         from infrastructure.database.db import db
         from sqlalchemy import text
@@ -90,7 +82,6 @@ def _guardar_mensaje(phone: str, role: str, content: str) -> None:
 
 
 def _limpiar_historial(phone: str) -> None:
-    """Elimina el historial de conversación (al terminar un agendamiento)."""
     try:
         from infrastructure.database.db import db
         from sqlalchemy import text
@@ -104,11 +95,10 @@ def _limpiar_historial(phone: str) -> None:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# ESTADO DE SESIÓN EN POSTGRESQL
+# PERSISTENCIA — ESTADO DE SESIÓN
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _cargar_estado(phone: str) -> dict:
-    """Carga el estado de la sesión desde la BD."""
     try:
         from infrastructure.database.db import db
         from sqlalchemy import text
@@ -116,27 +106,21 @@ def _cargar_estado(phone: str) -> dict:
             text("SELECT * FROM conversation_state WHERE phone = :phone"),
             {'phone': phone}
         ).fetchone()
-        if row:
-            return dict(row._mapping)
-        return {}
+        return dict(row._mapping) if row else {}
     except Exception as e:
         logger.error(f"Error cargando estado {phone}: {e}")
         return {}
 
 
 def _guardar_estado(phone: str, **kwargs) -> None:
-    """Upsert del estado de la sesión."""
     try:
         from infrastructure.database.db import db
         from sqlalchemy import text
-
         if not kwargs:
             return
-
-        cols = ', '.join(kwargs.keys())
-        updates = ', '.join(f"{k} = :{k}" for k in kwargs)
+        cols         = ', '.join(kwargs.keys())
+        updates      = ', '.join(f"{k} = :{k}" for k in kwargs)
         placeholders = ', '.join(f":{k}" for k in kwargs)
-
         db.session.execute(
             text(f"""
                 INSERT INTO conversation_state (phone, {cols}, updated_at)
@@ -152,7 +136,6 @@ def _guardar_estado(phone: str, **kwargs) -> None:
 
 
 def _limpiar_estado(phone: str) -> None:
-    """Elimina el estado de sesión al terminar el flujo."""
     try:
         from infrastructure.database.db import db
         from sqlalchemy import text
@@ -181,7 +164,7 @@ def _obtener_servicios_raw() -> list:
         r.raise_for_status()
         data = r.json()
         _cache_servicios['data'] = data
-        _cache_servicios['ts'] = time()
+        _cache_servicios['ts']   = time()
         return data
     except Exception as e:
         logger.error(f"Error obteniendo servicios: {e}")
@@ -189,14 +172,13 @@ def _obtener_servicios_raw() -> list:
 
 
 def _obtener_servicios_texto(servicios_raw: list) -> str:
-    """Texto compacto de servicios para el system prompt."""
     if not servicios_raw:
         return "Servicios: consultar con asesora."
     categorias: dict[str, list] = {}
     for s in servicios_raw:
-        cat = s.get('category', 'otro').lower().strip()
+        cat  = s.get('category', 'otro').lower().strip()
         mins = s['duration_minutes']
-        dur = f"{mins//60}h{mins%60:02d}m" if mins >= 60 else f"{mins}min"
+        dur  = f"{mins//60}h{mins%60:02d}m" if mins >= 60 else f"{mins}min"
         categorias.setdefault(cat, []).append(
             f"  [{s['id']}] {s['name']} · {dur} · ${float(s['price']):,.0f}"
         )
@@ -213,19 +195,105 @@ def _servicios_de_categoria(categoria: str, servicios_raw: list) -> list:
     ]
 
 
-def _formatear_menu_categoria(categoria: str, servicios: list) -> str:
+# ══════════════════════════════════════════════════════════════════════════════
+# MENSAJES INTERACTIVOS
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _enviar_menu_categorias(phone: str) -> None:
+    """Menú principal con botones de categoría — se envía en dos tandas por límite de 3."""
+    from infrastructure.web.whatsapp_sender import enviar_botones, enviar_lista
+
+    # Primera fila: 3 categorías
+    enviar_botones(
+        phone,
+        "¿Qué tipo de servicio te interesa? 🌸",
+        [
+            {'id': 'cat_facial',      'title': '🌸 Facial'},
+            {'id': 'cat_corporal',    'title': '💆 Corporal'},
+            {'id': 'cat_capilar',     'title': '💇 Capilar'},
+        ]
+    )
+    # Segunda fila: 2 categorías restantes
+    enviar_botones(
+        phone,
+        "O elige:",
+        [
+            {'id': 'cat_sueroterapia', 'title': '💉 Sueroterapia'},
+            {'id': 'cat_masaje',       'title': '🤲 Masaje'},
+        ]
+    )
+
+
+def _enviar_menu_servicios(phone: str, categoria: str, servicios: list) -> None:
+    """Lista de servicios de una categoría."""
+    from infrastructure.web.whatsapp_sender import enviar_lista
+
     if not servicios:
-        return (
-            f"Hmm, no encontré servicios de {categoria} disponibles 😔\n"
-            f"¿Te interesa otra categoría? 🌸"
-        )
-    texto = f"🌸 *Servicios de {categoria.capitalize()}:*\n\n"
-    for i, s in enumerate(servicios, 1):
+        from infrastructure.web.whatsapp_sender import enviar_mensaje
+        enviar_mensaje(phone, f"No encontré servicios de {categoria} disponibles 😔\n¿Te interesa otra categoría? 🌸")
+        return
+
+    rows = []
+    for s in servicios:
         mins = s['duration_minutes']
-        dur = f"{mins//60}h {mins%60:02d}min" if mins >= 60 else f"{mins}min"
-        texto += f"{i}️⃣ *{s['name']}*\n   ⏱ {dur} · 💰 ${float(s['price']):,.0f}\n\n"
-    texto += "¿Cuál te gustaría agendar? Escribe el número o el nombre 😊"
-    return texto
+        dur  = f"{mins//60}h {mins%60:02d}min" if mins >= 60 else f"{mins}min"
+        rows.append({
+            'id':          f"svc_{s['id']}",
+            'title':       s['name'][:24],
+            'description': f"{dur} · ${float(s['price']):,.0f}"
+        })
+
+    enviar_lista(
+        phone,
+        texto=f"🌸 *Servicios de {categoria.capitalize()}:*\n\nElige el que te interesa 👇",
+        boton_label="Ver servicios",
+        secciones=[{'title': categoria.capitalize(), 'rows': rows}]
+    )
+
+
+def _enviar_confirmacion_servicio(phone: str, servicio: dict) -> None:
+    """Botones Sí/No para confirmar el servicio."""
+    from infrastructure.web.whatsapp_sender import enviar_botones
+    mins = servicio['duration_minutes']
+    dur  = f"{mins//60}h {mins%60:02d}min" if mins >= 60 else f"{mins}min"
+    enviar_botones(
+        phone,
+        f"¿Confirmás que querés agendar *{servicio['name']}*? 😊\n\n💰 ${float(servicio['price']):,.0f} · ⏱ {dur}",
+        [
+            {'id': 'confirmar_servicio', 'title': '✅ Sí, agendar'},
+            {'id': 'cancelar_servicio',  'title': '❌ No, volver'},
+        ]
+    )
+
+
+def _enviar_menu_horarios(phone: str, fecha: str, slots: list[str]) -> None:
+    """Lista de horarios disponibles."""
+    from infrastructure.web.whatsapp_sender import enviar_lista, enviar_mensaje
+
+    try:
+        dt     = datetime.strptime(fecha, '%Y-%m-%d')
+        dias   = ['lunes','martes','miércoles','jueves','viernes','sábado','domingo']
+        meses  = ['enero','febrero','marzo','abril','mayo','junio',
+                  'julio','agosto','septiembre','octubre','noviembre','diciembre']
+        fecha_legible = f"{dias[dt.weekday()]} {dt.day} de {meses[dt.month-1]} de {dt.year}"
+    except ValueError:
+        fecha_legible = fecha
+
+    if not slots:
+        enviar_mensaje(phone, f"😔 No hay horarios disponibles para el {fecha_legible}.\n¿Te gustaría elegir otro día? 🗓")
+        return
+
+    rows = [
+        {'id': f"hora_{h.replace(':', '')}", 'title': h, 'description': fecha_legible}
+        for h in slots
+    ]
+
+    enviar_lista(
+        phone,
+        texto=f"📅 *Horarios disponibles — {fecha_legible}:*\n\nElige el que te quede mejor 👇",
+        boton_label="Ver horarios",
+        secciones=[{'title': 'Horarios disponibles', 'rows': rows}]
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -247,41 +315,11 @@ def _slots_disponibles(fecha: str) -> list[str]:
         return []
 
 
-def _formatear_slots(fecha: str, slots: list[str]) -> str:
-    try:
-        dt = datetime.strptime(fecha, '%Y-%m-%d')
-        dias = ['lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado', 'domingo']
-        meses = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio',
-                 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre']
-        fecha_legible = f"{dias[dt.weekday()]} {dt.day} de {meses[dt.month-1]} de {dt.year}"
-    except ValueError:
-        fecha_legible = fecha
-
-    if not slots:
-        return (
-            f"😔 No hay horarios disponibles para el {fecha_legible}.\n"
-            f"¿Te gustaría elegir otro día? 🗓"
-        )
-
-    emojis = ['1️⃣','2️⃣','3️⃣','4️⃣','5️⃣','6️⃣','7️⃣','8️⃣','9️⃣','🔟','1️⃣1️⃣']
-    opciones = "\n".join(
-        f"{emojis[i] if i < len(emojis) else '▪️'} {h}"
-        for i, h in enumerate(slots)
-    )
-    return (
-        f"📅 *Horarios disponibles — {fecha_legible}:*\n\n"
-        f"{opciones}\n\n"
-        f"¿Cuál te queda mejor? 😊"
-    )
-
-
 def _verificar_disponibilidad(fecha_cita: str) -> bool:
     try:
-        dt = datetime.fromisoformat(fecha_cita)
-        fecha = dt.strftime('%Y-%m-%d')
-        hora_solicitada = dt.strftime('%H:00')
-        slots = _slots_disponibles(fecha)
-        return hora_solicitada in slots
+        dt   = datetime.fromisoformat(fecha_cita)
+        slots = _slots_disponibles(dt.strftime('%Y-%m-%d'))
+        return dt.strftime('%H:00') in slots
     except Exception as e:
         logger.error(f"Error verificando disponibilidad: {e}")
         return True
@@ -303,32 +341,28 @@ SYSTEM_PROMPT = """Eres Sere, asistente virtual de Seremyc Sthetic 💜 — cent
 2. JAMÁS inventes horarios, fechas, precios ni datos del cliente.
 3. JAMÁS cambies ni "corrijas" datos que el cliente proporcionó — guárdalos exactamente.
 4. NUNCA repitas preguntas que ya hiciste en esta conversación.
-5. Si hay un [CTX:SERVICIO] en el historial, ese ES el servicio seleccionado. No preguntes de nuevo.
+5. Si hay un [CTX:SERVICIO_SELECCIONADO] en el historial, ese ES el servicio. No preguntes de nuevo.
 6. Cuando detectes el día deseado, emite SOLO: CONSULTAR_DISPONIBILIDAD:{"fecha":"YYYY-MM-DD"}
 7. Solo cuando el cliente confirme todos los datos, emite SOLO: AGENDAR_CITA:{...json...}
 8. Si el cliente pide hablar con una persona: responde SOLO "CONTACTAR_ASESOR"
+9. NO muestres menús de categorías ni servicios — el sistema los envía como botones interactivos.
 
 ═══ FECHAS ═══
 Hoy: {fecha_actual}
 - Fechas de nacimiento → DD/MM/YYYY
 - Fechas de cita → YYYY-MM-DDTHH:MM:00
-- Interpreta siempre: "mañana", "el viernes", "la próxima semana", etc.
+- Interpreta: "mañana", "el viernes", "la próxima semana", etc.
 
-═══ FLUJO OBLIGATORIO ═══
+═══ FLUJO ═══
 
 [PASO 1 — BIENVENIDA]
-Saluda con tu nombre y presenta:
-"¿Qué tipo de servicio te interesa? 🌸
-1️⃣ Facial  2️⃣ Corporal  3️⃣ Capilar  4️⃣ Sueroterapia  5️⃣ Masaje"
+Saluda brevemente. El sistema ya envía el menú de categorías como botones.
 
 [PASO 2 — CONFIRMAR SERVICIO]
-Al elegir categoría y servicio, confirma:
-"¿Confirmás que querés agendar *[nombre servicio]*? 😊
-💰 $[precio] · ⏱ [duración]"
-Espera un "Sí" explícito antes de continuar.
+El sistema envía botones de confirmación. Espera "confirmar_servicio" antes de continuar.
 
 [PASO 3 — RECOLECCIÓN DE DATOS]
-Pide UNO por UNO. Cuando ya lo tienes en el historial, NO vuelvas a pedirlo:
+Pide UNO por UNO (solo si no está ya en el historial):
 ① Nombre completo
 ② Correo electrónico
 ③ Fecha de nacimiento (DD/MM/YYYY)
@@ -337,33 +371,26 @@ Pide UNO por UNO. Cuando ya lo tienes en el historial, NO vuelvas a pedirlo:
 ⑥ Alergias (o "ninguna")
 ⑦ Observaciones para el terapeuta (o "ninguna")
 ⑧ Día deseado → emite CONSULTAR_DISPONIBILIDAD:{"fecha":"YYYY-MM-DD"}
-⑨ Horario → el cliente elige de la lista que el sistema muestra
+⑨ El sistema muestra horarios como lista interactiva. Cuando el cliente elija, recibirás "hora_HHMM".
 
 [PASO 4 — RESUMEN]
-Muestra EXACTAMENTE lo que el cliente dio, sin cambiar nada:
 "📋 *Resumen de tu cita:*
-👤 [nombre]
-📧 [correo]
-🎂 [fecha nacimiento]
-🏠 [dirección]
-🧴 Piel: [tipo] · Alergias: [alergias]
-📝 Obs: [observaciones]
-💆 [nombre del servicio]
-📅 [fecha y hora legibles]
-💰 $[precio]
-
+👤 [nombre] · 📧 [correo] · 🎂 [nacimiento]
+🏠 [dirección] · 🧴 Piel: [tipo] · Alergias: [alergias]
+📝 [observaciones]
+💆 [servicio] · 📅 [fecha y hora] · 💰 $[precio]
 ¿Todo correcto? ✅"
 
 [PASO 5 — AGENDAR]
-Solo si el cliente confirma ("sí", "correcto", "así es", "perfecto"):
-AGENDAR_CITA:{"nombre":"...","correo":"...","fecha_nacimiento":"DD/MM/YYYY","direccion":"...","tipo_piel":"...","alergias":"...","observaciones":"...","servicio_id":NUMERO,"fecha_cita":"YYYY-MM-DDTHH:MM:00"}
+Solo si confirma:
+AGENDAR_CITA:{"nombre":"...","correo":"...","fecha_nacimiento":"DD/MM/YYYY","direccion":"...","tipo_piel":"...","alergias":"...","observaciones":"...","servicio_id":ID,"fecha_cita":"YYYY-MM-DDTHH:MM:00"}
 
-═══ SERVICIOS DEL NEGOCIO ═══
+═══ SERVICIOS ═══
 {servicios}"""
 
 
 def _construir_system(servicios_raw: list) -> str:
-    fecha_actual = datetime.now().strftime('%A %d de %B de %Y')
+    fecha_actual   = datetime.now().strftime('%A %d de %B de %Y')
     servicios_texto = _obtener_servicios_texto(servicios_raw)
     return (
         SYSTEM_PROMPT
@@ -410,19 +437,16 @@ def _manejar_asesor(numero: str) -> str:
     if numero_asesor:
         return (
             f"¡Claro! 😊 Te conecto con una de nuestras asesoras.\n\n"
-            f"📲 Escríbenos directamente: wa.me/{numero_asesor}\n\n"
-            f"También puedes seguir chateando conmigo si prefieres 💜"
+            f"📲 Escríbenos: wa.me/{numero_asesor}\n\n"
+            f"También puedo seguir ayudándote por aquí 💜"
         )
-    return (
-        f"¡Por supuesto! 😊 Una de nuestras asesoras te atenderá pronto.\n\n"
-        f"También puedo seguir ayudándote por aquí si lo prefieres 💜"
-    )
+    return "¡Por supuesto! 😊 Una de nuestras asesoras te atenderá pronto 💜"
 
 
 def _manejar_confirmacion_cita(numero: str, accion: str) -> str:
     try:
         phone = _normalizar_numero(numero)
-        r = requests.get(
+        r     = requests.get(
             f'{_base_url()}/api/agent/client-history',
             params={'phone': phone},
             headers=_headers(),
@@ -432,7 +456,7 @@ def _manejar_confirmacion_cita(numero: str, accion: str) -> str:
         if not data.get('exists'):
             return "No encontré citas asociadas a tu número 😔\n¿Quieres agendar una nueva? 🌸"
 
-        citas = data.get('appointments', [])
+        citas   = data.get('appointments', [])
         proxima = next((c for c in citas if c['status'] == 'confirmed'), None)
         if not proxima:
             return "No tienes citas confirmadas próximas 😔\n¿Quieres agendar una? 🌸"
@@ -456,10 +480,7 @@ def _manejar_confirmacion_cita(numero: str, accion: str) -> str:
                 f"Cuando quieras reagendar, aquí estaré 🌸"
             )
         elif accion == 'reagendar':
-            return (
-                f"¡Claro {nombre}! Vamos a reagendar tu *{proxima['service']}* 🗓\n\n"
-                f"¿Qué día te vendría mejor?"
-            )
+            return f"¡Claro {nombre}! Vamos a reagendar tu *{proxima['service']}* 🗓\n\n¿Qué día te vendría mejor?"
     except Exception as e:
         logger.error(f"Error manejando acción {accion}: {e}")
         return "Hubo un error procesando tu solicitud 😔 Por favor contáctanos directamente."
@@ -468,7 +489,7 @@ def _manejar_confirmacion_cita(numero: str, accion: str) -> str:
 def _guardar_calificacion(numero: str, calificacion: int) -> str | None:
     try:
         phone = _normalizar_numero(numero)
-        r = requests.get(
+        r     = requests.get(
             f'{_base_url()}/api/agent/client-history',
             params={'phone': phone},
             headers=_headers(), timeout=5
@@ -490,15 +511,8 @@ def _guardar_calificacion(numero: str, calificacion: int) -> str | None:
         )
         nombre = data['full_name'].split()[0]
         if calificacion >= 4:
-            return (
-                f"¡Gracias {nombre}! 🌟 Nos alegra saber que tuviste una gran experiencia.\n\n"
-                f"¿Quieres dejarnos algún comentario? 😊\n_(Escribe NO si prefieres no hacerlo)_"
-            )
-        else:
-            return (
-                f"Gracias por tu honestidad {nombre} 🙏\n\n"
-                f"Nos importa mucho mejorar. ¿Qué podríamos hacer mejor para ti? 💜"
-            )
+            return f"¡Gracias {nombre}! 🌟 Nos alegra saber que tuviste una gran experiencia.\n\n¿Quieres dejarnos algún comentario? 😊"
+        return f"Gracias por tu honestidad {nombre} 🙏\n\n¿Qué podríamos hacer mejor para ti? 💜"
     except Exception as e:
         logger.error(f"Error guardando calificación: {e}")
         return None
@@ -508,7 +522,7 @@ def _guardar_calificacion(numero: str, calificacion: int) -> str | None:
 # MANEJO DE DISPONIBILIDAD Y AGENDAMIENTO
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _manejar_consulta_disponibilidad(phone: str, texto_llm: str, system: str, historial: list) -> str:
+def _manejar_consulta_disponibilidad(phone: str, texto_llm: str) -> str:
     try:
         json_str = _extraer_token(texto_llm, 'CONSULTAR_DISPONIBILIDAD:')
         if not json_str:
@@ -516,29 +530,26 @@ def _manejar_consulta_disponibilidad(phone: str, texto_llm: str, system: str, hi
         datos = json.loads(json_str)
         fecha = datos['fecha']
     except Exception as e:
-        logger.error(f"CONSULTAR_DISPONIBILIDAD malformado: {e} — {texto_llm}")
+        logger.error(f"CONSULTAR_DISPONIBILIDAD malformado: {e}")
         msg = "Tuve un problema consultando la disponibilidad 😔 ¿Me repites el día que prefieres?"
         _guardar_mensaje(phone, 'assistant', msg)
         return msg
 
     slots = _slots_disponibles(fecha)
-    slots_texto = _formatear_slots(fecha, slots)
-
-    # Guardar en estado la fecha pendiente y los slots disponibles
     _guardar_estado(phone, pending_date=fecha)
 
-    # Reemplazar el token en historial por algo legible para el LLM
-    msg_sistema = (
-        f"[SISTEMA] Disponibilidad consultada para {fecha}. "
-        f"Slots disponibles: {', '.join(slots) if slots else 'ninguno'}. "
-        f"Muestra exactamente estos horarios al cliente sin inventar ninguno."
-    )
+    # Enviar lista interactiva de horarios directamente
+    _enviar_menu_horarios(phone, fecha, slots)
 
-    # Respuesta final que ve el cliente: directamente los slots formateados
-    # Sin pasar por el LLM para evitar que invente o omita horarios
-    _guardar_mensaje(phone, 'assistant', slots_texto)
-    _guardar_mensaje(phone, 'user', msg_sistema)   # contexto para el próximo turno
-    return slots_texto
+    # Guardar contexto para el LLM
+    ctx = (
+        f"[SISTEMA] Disponibilidad consultada para {fecha}. "
+        f"Slots: {', '.join(slots) if slots else 'ninguno'}. "
+        f"Se enviaron como lista interactiva al cliente."
+    )
+    _guardar_mensaje(phone, 'assistant', f"[Horarios enviados para {fecha}]")
+    _guardar_mensaje(phone, 'user', ctx)
+    return ''  # Ya se envió directamente
 
 
 def _agendar_cita(phone: str, texto_llm: str) -> str:
@@ -549,17 +560,11 @@ def _agendar_cita(phone: str, texto_llm: str) -> str:
         datos = json.loads(json_str)
         datos['servicio_id'] = int(datos['servicio_id'])
 
-        # Verificar disponibilidad antes de crear
         if not _verificar_disponibilidad(datos['fecha_cita']):
-            dt = datetime.fromisoformat(datos['fecha_cita'])
-            fecha = dt.strftime('%Y-%m-%d')
-            slots = _slots_disponibles(fecha)
-            slots_texto = ', '.join(slots[:5]) if slots else 'ninguno disponible'
-            msg = (
-                f"😔 El horario {dt.strftime('%H:00')} del {dt.strftime('%d/%m/%Y')} ya está ocupado.\n\n"
-                f"⏰ Horarios libres ese día: {slots_texto}\n\n"
-                f"¿Cuál te viene mejor?"
-            )
+            dt    = datetime.fromisoformat(datos['fecha_cita'])
+            slots = _slots_disponibles(dt.strftime('%Y-%m-%d'))
+            _enviar_menu_horarios(phone, dt.strftime('%Y-%m-%d'), slots)
+            msg = f"😔 El horario {dt.strftime('%H:00')} ya está ocupado. Te muestro los disponibles:"
             _guardar_mensaje(phone, 'assistant', msg)
             return msg
 
@@ -597,10 +602,9 @@ def _agendar_cita(phone: str, texto_llm: str) -> str:
         r_cita.raise_for_status()
         cita = r_cita.json()
 
-        # Formatear fecha legible para el mensaje de confirmación
         try:
-            dt = datetime.fromisoformat(datos['fecha_cita'])
-            dias = ['lunes','martes','miércoles','jueves','viernes','sábado','domingo']
+            dt    = datetime.fromisoformat(datos['fecha_cita'])
+            dias  = ['lunes','martes','miércoles','jueves','viernes','sábado','domingo']
             meses = ['enero','febrero','marzo','abril','mayo','junio',
                      'julio','agosto','septiembre','octubre','noviembre','diciembre']
             fecha_legible = f"{dias[dt.weekday()]} {dt.day} de {meses[dt.month-1]} de {dt.year} a las {dt.strftime('%H:%M')}"
@@ -613,25 +617,19 @@ def _agendar_cita(phone: str, texto_llm: str) -> str:
             f"💆 {cita['service']}\n"
             f"📅 {fecha_legible}\n"
             f"💰 ${float(cita['price']):,.0f}\n\n"
-            f"¡Te esperamos con mucho cariño en Seremyc Sthetic! 💜\n"
-            f"Si necesitas algo más, aquí estaré 🌸"
+            f"¡Te esperamos con mucho cariño en Seremyc Sthetic! 💜"
         )
 
-        # Limpiar todo el estado de esta conversación
         _limpiar_historial(phone)
         _limpiar_estado(phone)
-
         return confirmacion
 
     except json.JSONDecodeError as e:
-        logger.error(f"JSON inválido AGENDAR_CITA: {e} — {texto_llm}")
+        logger.error(f"JSON inválido AGENDAR_CITA: {e}")
         return "Hubo un problema procesando tu cita 😔 ¿Intentamos de nuevo?"
     except Exception as e:
         logger.error(f"Error agendando cita {phone}: {e}")
-        return (
-            "Ocurrió un error al agendar 😔\n"
-            "Por favor escribe *asesor* para que te ayude una de nosotras 💜"
-        )
+        return "Ocurrió un error al agendar 😔\nEscribe *asesor* para que te ayude una de nosotras 💜"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -639,34 +637,35 @@ def _agendar_cita(phone: str, texto_llm: str) -> str:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def procesar_mensaje(numero: str, mensaje: str) -> str:
-
-    phone = _normalizar_numero(numero)
+    """
+    Retorna el texto a enviar, o '' si ya se envió un mensaje interactivo directamente.
+    """
+    phone         = _normalizar_numero(numero)
     mensaje_lower = mensaje.lower().strip()
 
-    # ── Acciones especiales directas ────────────────────────────────────────
+    # ── Acciones de gestión de cita ──────────────────────────────────────────
     if mensaje_lower in ['confirmar', 'cancelar', 'reagendar']:
         return _manejar_confirmacion_cita(phone, mensaje_lower)
 
+    # ── Solicitud de asesor ──────────────────────────────────────────────────
     palabras_asesor = ['asesor', 'asesora', 'humano', 'persona real',
                        'hablar con alguien', 'agente', 'representante']
     if any(p in mensaje_lower for p in palabras_asesor):
-        return _manejar_asesor(phone)
+        return 'CONTACTAR_ASESOR'
 
     # ── Calificación de encuesta ─────────────────────────────────────────────
     if mensaje_lower in ['1', '2', '3', '4', '5']:
-        resultado_encuesta = _guardar_calificacion(phone, int(mensaje_lower))
-        if resultado_encuesta:
-            return resultado_encuesta
-        # Si no era encuesta, continúa el flujo normal
+        resultado = _guardar_calificacion(phone, int(mensaje_lower))
+        if resultado:
+            return resultado
 
-    # ── Cargar datos persistentes ────────────────────────────────────────────
+    # ── Cargar estado persistente ────────────────────────────────────────────
     servicios_raw = _obtener_servicios_raw()
-    historial = _cargar_historial(phone)
-    estado = _cargar_estado(phone)
-
+    historial     = _cargar_historial(phone)
+    estado        = _cargar_estado(phone)
     es_primer_mensaje = len(historial) == 0
 
-    # ── Primer mensaje: inyectar contexto del cliente si ya existe ───────────
+    # ── Primer mensaje: contexto del cliente ─────────────────────────────────
     if es_primer_mensaje:
         try:
             r = requests.get(
@@ -677,112 +676,122 @@ def procesar_mensaje(numero: str, mensaje: str) -> str:
             )
             data_cliente = r.json()
             if data_cliente.get('exists'):
-                citas = data_cliente.get('appointments', [])
+                citas          = data_cliente.get('appointments', [])
                 ultimo_servicio = citas[0]['service'] if citas else None
                 ctx = (
                     f"[CTX:CLIENTE_CONOCIDO] "
                     f"Nombre: {data_cliente['full_name']} | "
                     f"Último servicio: {ultimo_servicio or 'ninguno'} | "
-                    f"Salúdala por su nombre de forma natural y pregunta en qué le puedes ayudar."
+                    f"Salúdala por su nombre y pregunta en qué le puedes ayudar."
                 )
                 _guardar_mensaje(phone, 'user', ctx)
                 historial = _cargar_historial(phone)
         except Exception as e:
-            logger.error(f"Error obteniendo historial cliente {phone}: {e}")
+            logger.error(f"Error historial cliente {phone}: {e}")
 
-    # ── Detección de categoría (números 1-5 sin servicio previo) ────────────
-    #    Solo aplica si el estado NO tiene un servicio ya seleccionado
-    if not estado.get('selected_service_id'):
-        categoria_detectada = None
+    # ── Selección de categoría vía botón interactivo ─────────────────────────
+    # Los botones devuelven el ID exacto: 'cat_facial', 'cat_corporal', etc.
+    MAPA_CAT = {
+        'cat_facial':       'facial',
+        'cat_corporal':     'corporal',
+        'cat_capilar':      'capilar',
+        'cat_sueroterapia': 'sueroterapia',
+        'cat_masaje':       'masaje',
+    }
 
-        if mensaje_lower.strip() in MAPA_NUMEROS_CAT:
-            categoria_detectada = MAPA_NUMEROS_CAT[mensaje_lower.strip()]
-        elif mensaje_lower.strip() in CATEGORIAS:
-            categoria_detectada = mensaje_lower.strip()
-
-        if categoria_detectada:
-            servicios_cat = _servicios_de_categoria(categoria_detectada, servicios_raw)
-            _guardar_estado(phone,
-                            selected_category=categoria_detectada,
-                            current_step='eligiendo_servicio')
-            respuesta = _formatear_menu_categoria(categoria_detectada, servicios_cat)
-            _guardar_mensaje(phone, 'user', mensaje)
-            _guardar_mensaje(phone, 'assistant', respuesta)
-            return respuesta
-
-    # ── Detección de servicio por número (dentro de una categoría) ──────────
-    if (mensaje_lower.strip().isdigit()
-            and estado.get('selected_category')
-            and not estado.get('selected_service_id')):
-
-        categoria = estado['selected_category']
+    if mensaje_lower in MAPA_CAT and not estado.get('selected_service_id'):
+        categoria     = MAPA_CAT[mensaje_lower]
         servicios_cat = _servicios_de_categoria(categoria, servicios_raw)
-        idx = int(mensaje_lower.strip()) - 1
+        _guardar_estado(phone, selected_category=categoria, current_step='eligiendo_servicio')
+        _guardar_mensaje(phone, 'user', f"[Categoría elegida: {categoria}]")
+        _enviar_menu_servicios(phone, categoria, servicios_cat)
+        return ''  # Ya se envió como lista interactiva
 
-        if 0 <= idx < len(servicios_cat):
-            servicio = servicios_cat[idx]
-            mins = servicio.get('duration_minutes', 0)
-            dur = f"{mins//60}h {mins%60:02d}min" if mins >= 60 else f"{mins}min"
+    # ── Selección de servicio vía lista interactiva ──────────────────────────
+    # Las listas devuelven el ID: 'svc_3', 'svc_12', etc.
+    if mensaje_lower.startswith('svc_') and not estado.get('selected_service_id'):
+        try:
+            svc_id  = int(mensaje_lower.replace('svc_', ''))
+            servicio = next((s for s in servicios_raw if s['id'] == svc_id), None)
+            if servicio:
+                _guardar_estado(phone,
+                                selected_service_id=servicio['id'],
+                                selected_service_name=servicio['name'],
+                                selected_service_price=float(servicio['price']),
+                                selected_service_duration=servicio['duration_minutes'],
+                                current_step='confirmando_servicio')
+                ctx_svc = (
+                    f"[CTX:SERVICIO_SELECCIONADO] "
+                    f"Nombre: {servicio['name']} | ID: {servicio['id']} | "
+                    f"Precio: ${float(servicio['price']):,.0f} | "
+                    f"Duración: {servicio['duration_minutes']}min"
+                )
+                _guardar_mensaje(phone, 'user', ctx_svc)
+                _enviar_confirmacion_servicio(phone, servicio)
+                return ''  # Ya se envió como botones
+        except Exception as e:
+            logger.error(f"Error seleccionando servicio {mensaje}: {e}")
 
-            # Persistir el servicio seleccionado en el estado
-            _guardar_estado(phone,
-                            selected_service_id=servicio['id'],
-                            selected_service_name=servicio['name'],
-                            selected_service_price=float(servicio['price']),
-                            selected_service_duration=mins,
-                            current_step='confirmando_servicio')
+    # ── Confirmación de servicio vía botón ───────────────────────────────────
+    if mensaje_lower == 'confirmar_servicio':
+        _guardar_estado(phone, current_step='recolectando_datos')
+        _guardar_mensaje(phone, 'user', '[Cliente confirmó el servicio]')
+        historial = _cargar_historial(phone)
+        # Continúa al LLM para que pida el primer dato
 
-            respuesta = (
-                f"¿Confirmás que querés agendar *{servicio['name']}*? 😊\n\n"
-                f"💰 ${float(servicio['price']):,.0f} · ⏱ {dur}"
-            )
+    elif mensaje_lower == 'cancelar_servicio':
+        _limpiar_estado(phone)
+        _limpiar_historial(phone)
+        _enviar_menu_categorias(phone)
+        return ''
 
-            # Inyectar contexto del servicio en el historial para el LLM
-            ctx_servicio = (
-                f"[CTX:SERVICIO_SELECCIONADO] "
-                f"Nombre: {servicio['name']} | ID: {servicio['id']} | "
-                f"Precio: ${float(servicio['price']):,.0f} | Duración: {mins}min | "
-                f"El cliente ha elegido ESTE servicio. No preguntes de nuevo."
-            )
-            _guardar_mensaje(phone, 'user', ctx_servicio)
-            _guardar_mensaje(phone, 'assistant', respuesta)
-            return respuesta
+    # ── Selección de horario vía lista interactiva ────────────────────────────
+    # Las listas de horario devuelven: 'hora_0800', 'hora_1400', etc.
+    if mensaje_lower.startswith('hora_') and estado.get('pending_date'):
+        hora_str  = mensaje_lower.replace('hora_', '')  # '0800'
+        hora_fmt  = f"{hora_str[:2]}:{hora_str[2:]}"    # '08:00'
+        fecha_dt  = f"{estado['pending_date']}T{hora_fmt}:00"
+        ctx_hora  = f"[CTX:HORARIO_ELEGIDO] Fecha y hora: {fecha_dt}"
+        _guardar_mensaje(phone, 'user', ctx_hora)
+        _guardar_estado(phone, pending_date=None, current_step='resumen')
+        historial = _cargar_historial(phone)
+        # Continúa al LLM para que muestre el resumen
 
-    # ── Flujo LLM para el resto de la conversación ──────────────────────────
-
-    # Enriquecer el system prompt con el estado actual si hay servicio seleccionado
+    # ── Flujo LLM ────────────────────────────────────────────────────────────
     system = _construir_system(servicios_raw)
 
     if estado.get('selected_service_id'):
         mins = estado.get('selected_service_duration', 0)
-        dur = f"{mins//60}h {mins%60:02d}min" if mins >= 60 else f"{mins}min"
+        dur  = f"{mins//60}h {mins%60:02d}min" if mins >= 60 else f"{mins}min"
         system += (
-            f"\n\n═══ SERVICIO ACTIVO EN ESTA SESIÓN ═══\n"
+            f"\n\n═══ SERVICIO ACTIVO ═══\n"
             f"El cliente ya eligió: *{estado['selected_service_name']}* "
             f"(ID: {estado['selected_service_id']}) · "
             f"${float(estado['selected_service_price']):,.0f} · {dur}\n"
-            f"NO preguntes de nuevo por el servicio. Continúa con los datos del cliente."
+            f"NO preguntes de nuevo por el servicio."
         )
 
-    # Recargar historial actualizado y agregar mensaje del usuario
     historial = _cargar_historial(phone)
     _guardar_mensaje(phone, 'user', mensaje)
     historial.append({'role': 'user', 'content': mensaje})
 
     texto_respuesta = _llamar_llm(system, historial)
 
-    # ── Interceptar tokens especiales ────────────────────────────────────────
-
+    # ── Interceptar tokens ────────────────────────────────────────────────────
     if 'CONTACTAR_ASESOR' in texto_respuesta:
         respuesta_asesor = _manejar_asesor(phone)
         _guardar_mensaje(phone, 'assistant', respuesta_asesor)
         return respuesta_asesor
 
     if 'CONSULTAR_DISPONIBILIDAD:' in texto_respuesta:
-        return _manejar_consulta_disponibilidad(phone, texto_respuesta, system, historial)
+        _manejar_consulta_disponibilidad(phone, texto_respuesta)
+        return ''  # Ya se envió como lista interactiva
 
     if 'AGENDAR_CITA:' in texto_respuesta:
-        return _agendar_cita(phone, texto_respuesta)
+        resultado = _agendar_cita(phone, texto_respuesta)
+        if resultado:
+            _guardar_mensaje(phone, 'assistant', resultado)
+        return resultado
 
     _guardar_mensaje(phone, 'assistant', texto_respuesta)
     return texto_respuesta
