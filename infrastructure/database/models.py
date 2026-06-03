@@ -93,11 +93,12 @@ class FinanceModel(db.Model):
 class ConversationModeModel(db.Model):
     __tablename__ = 'conversation_modes'
 
-    id         = db.Column(db.Integer, primary_key=True)
-    phone      = db.Column(db.String(20), nullable=False, unique=True, index=True)
-    mode       = db.Column(db.String(10), default='bot')  # 'bot' | 'human'
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    updated_by = db.Column(db.String(50))  # quien cambió el modo
+    id             = db.Column(db.Integer, primary_key=True)
+    phone          = db.Column(db.String(20), nullable=False, unique=True, index=True)
+    mode           = db.Column(db.String(10), default='bot')
+    needs_attention = db.Column(db.Boolean, default=False)  # ← nuevo
+    updated_at     = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_by     = db.Column(db.String(50))
 
 class InventoryModel(db.Model):
     __tablename__ = 'inventory'
@@ -144,3 +145,40 @@ class BeforeAfterPhotoModel(db.Model):
     notes = db.Column(db.Text)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
+# ─────────────────────────────────────────
+# Agregar al final de models.py
+# ─────────────────────────────────────────
+
+class ConversationHistoryModel(db.Model):
+    """Historial de mensajes del agente WhatsApp — persiste entre reinicios."""
+    __tablename__ = 'conversation_history'
+
+    id         = db.Column(db.Integer, primary_key=True)
+    phone      = db.Column(db.String(30), nullable=False, index=True)
+    role       = db.Column(db.String(10), nullable=False)   # 'user' | 'assistant'
+    content    = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+
+class ConversationStateModel(db.Model):
+    """Estado de la sesión activa — servicio elegido, paso actual, datos recolectados."""
+    __tablename__ = 'conversation_state'
+
+    phone                    = db.Column(db.String(30), primary_key=True)
+    current_step             = db.Column(db.String(50), default='inicio')
+    selected_service_id      = db.Column(db.Integer)
+    selected_service_name    = db.Column(db.String(200))
+    selected_service_price   = db.Column(db.Numeric(12, 2))
+    selected_service_duration= db.Column(db.Integer)
+    selected_category        = db.Column(db.String(50))
+    pending_date             = db.Column(db.String(20))
+    updated_at               = db.Column(db.DateTime, default=datetime.utcnow,
+                                         onupdate=datetime.utcnow)
+    
+class PushTokenModel(db.Model):
+    __tablename__ = 'push_tokens'
+
+    id         = db.Column(db.Integer, primary_key=True)
+    token      = db.Column(db.String(255), nullable=False, unique=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

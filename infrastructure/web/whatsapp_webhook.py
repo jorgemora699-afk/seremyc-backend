@@ -96,8 +96,6 @@ def _handle_meta():
         logger.info(f"Mensaje recibido de {numero_cliente}")
         logger.info(f"Texto: {mensaje_entrante}")
 
-        modo = _obtener_modo(numero_cliente)
-
         logger.info(f"Modo detectado: {modo}")
         if modo == 'human':
             # No responde el bot, solo registra que llegó el mensaje
@@ -110,10 +108,24 @@ def _handle_meta():
             mensaje=mensaje_entrante
         )
 
-        # Si el cliente pidió asesor, cambiar modo a human
-        if respuesta_texto == 'SOLICITA_ASESOR':
-            _cambiar_modo(numero_cliente, 'human')
+        if respuesta_texto.startswith('CONTACTAR_ASESOR'):
+            _cambiar_modo(numero_cliente, 'human', needs_attention=True)
             respuesta_texto = _manejar_asesor_webhook(numero_cliente)
+            # Obtener nombre del cliente para la notificación
+            nombre = numero_cliente  # fallback
+            try:
+                r = requests.get(
+                    f'{os.getenv("API_BASE_URL")}/api/agent/client-history',
+                    params={'phone': numero_cliente},
+                    headers={'X-Agent-Key': os.getenv('AGENT_API_KEY')},
+                    timeout=3
+                )
+                data = r.json()
+                if data.get('exists'):
+                    nombre = data['full_name'].split()[0]
+            except Exception:
+                pass
+            _enviar_push_notification(nombre)
 
         enviar_mensaje(numero_cliente, respuesta_texto)
 
@@ -123,7 +135,7 @@ def _handle_meta():
     return jsonify({'status': 'ok'}), 200
 
 
-def _cambiar_modo(phone: str, mode: str) -> None:
+def _cambiar_modo(phone: str, mode: str, needs_attention: bool = False) -> None:
     try:
         base_url = os.getenv('API_BASE_URL', 'http://localhost:5000')
         headers  = {
@@ -132,13 +144,54 @@ def _cambiar_modo(phone: str, mode: str) -> None:
         }
         requests.put(
             f'{base_url}/api/agent/conversation-mode/{phone}',
-            json={'mode': mode, 'updated_by': 'bot'},
+            json={
+                'mode': mode,
+                'updated_by': 'bot',
+                'needs_attention': needs_attention
+            },
             headers=headers,
             timeout=3
         )
     except Exception as e:
         logger.error(f"Error cambiando modo: {e}")
 
+def _enviar_push_notification(nombre_cliente: str) -> None:
+    try:
+        base_url = os.getenv('API_BASE_URL', 'http://localhost:5000')
+        headers  = {'X-Agent-Key': os.getenv('AGENT_API_KEY')}
+
+        # Obtener todos los tokens guardados
+        r = requests.get(
+            f'{base_url}/api/agent/push-token',
+            headers=headers,
+            timeout=5
+        )
+        tokens = r.json()
+
+        if not tokens:
+            return
+
+        # Enviar a la Expo Push API
+        mensajes = [
+            {
+                'to':    token,
+                'sound': 'default',
+                'title': '🚨 Cliente necesita asesora',
+                'body':  f'{nombre_cliente} está pidiendo hablar con una persona.',
+                'data':  {'screen': 'WhatsApp'},
+            }
+            for token in tokens
+        ]
+
+        requests.post(
+            'https://exp.host/--/api/v2/push/send',
+            json=mensajes,
+            headers={'Content-Type': 'application/json'},
+            timeout=10
+        )
+
+    except Exception as e:
+        logger.error(f"Error enviando push notification: {e}")
 
 def _manejar_asesor_webhook(phone: str) -> str:
     numero_asesor = os.getenv('ASESOR_WHATSAPP', '')

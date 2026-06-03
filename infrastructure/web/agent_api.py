@@ -431,11 +431,13 @@ def set_conversation_mode(phone):
     if modo:
         modo.mode = new_mode
         modo.updated_by = data.get('updated_by', 'admin')
+        modo.needs_attention = data.get('needs_attention', False)  # ← nuevo
     else:
         modo = ConversationModeModel(
             phone=phone,
             mode=new_mode,
-            updated_by=data.get('updated_by', 'admin')
+            updated_by=data.get('updated_by', 'admin'),
+            needs_attention=data.get('needs_attention', False)  # ← nuevo
         )
         db.session.add(modo)
 
@@ -461,10 +463,36 @@ def get_conversations():
             'phone':      m.phone,
             'mode':       m.mode,
             'name':       cliente.full_name if cliente else m.phone,
-            'updated_at': m.updated_at.isoformat() if m.updated_at else None
+            'updated_at': m.updated_at.isoformat() if m.updated_at else None,
+            'needs_attention': m.needs_attention or False
         })
 
     return jsonify(resultado)
+
+@agent_bp.route('/push-token', methods=['POST'])
+@jwt_required()
+def save_push_token():
+    from infrastructure.database.models import PushTokenModel
+    data = request.get_json()
+    token = data.get('token')
+
+    if not token:
+        return jsonify({'error': 'Token requerido'}), 400
+
+    existing = PushTokenModel.query.filter_by(token=token).first()
+    if not existing:
+        db.session.add(PushTokenModel(token=token))
+        db.session.commit()
+
+    return jsonify({'message': 'Token guardado'}), 200
+
+
+@agent_bp.route('/push-token', methods=['GET'])
+@require_agent_key
+def get_push_tokens():
+    from infrastructure.database.models import PushTokenModel
+    tokens = PushTokenModel.query.all()
+    return jsonify([t.token for t in tokens])
 
 # ─────────────────────────────────────────
 # HELPER
