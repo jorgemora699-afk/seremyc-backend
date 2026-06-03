@@ -650,5 +650,5 @@ def _agendar_cita(numero: str, texto: str) -> str:
         logger.error(f"Error agendando cita {numero}: {e}")
         return (
             "Ocurrió un error al agendar 😔\n"
-            "Por favor intenta de nuevo o escribe *asesor* para que te ayude una de nosotras 💜"
+            "Por favor intenta de nuevo o escribe asesor para que te ayude una de nosotras 💜"
         )
