@@ -393,10 +393,24 @@ def save_survey(appointment_id):
 @require_agent_key
 def get_conversation_mode(phone):
     from infrastructure.database.models import ConversationModeModel
+
     modo = ConversationModeModel.query.filter_by(phone=phone).first()
+
+    # Si no existe, crearlo automáticamente
+    if not modo:
+
+        modo = ConversationModeModel(
+            phone=phone,
+            mode='bot',
+            updated_by='system'
+        )
+
+        db.session.add(modo)
+        db.session.commit()
+
     return jsonify({
         'phone': phone,
-        'mode': modo.mode if modo else 'bot'
+        'mode': modo.mode
     })
 
 
