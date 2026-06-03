@@ -637,9 +637,6 @@ def _agendar_cita(phone: str, texto_llm: str) -> str:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def procesar_mensaje(numero: str, mensaje: str) -> str:
-    """
-    Retorna el texto a enviar, o '' si ya se envió un mensaje interactivo directamente.
-    """
     phone         = _normalizar_numero(numero)
     mensaje_lower = mensaje.lower().strip()
 
@@ -659,38 +656,12 @@ def procesar_mensaje(numero: str, mensaje: str) -> str:
         if resultado:
             return resultado
 
-    # ── Cargar estado persistente ────────────────────────────────────────────
+    # ── Cargar estado ────────────────────────────────────────────────────────
     servicios_raw = _obtener_servicios_raw()
-    historial     = _cargar_historial(phone)
     estado        = _cargar_estado(phone)
-    es_primer_mensaje = len(historial) == 0
+    historial     = _cargar_historial(phone)
 
-    # ── Primer mensaje: contexto del cliente ─────────────────────────────────
-    if es_primer_mensaje:
-        try:
-            r = requests.get(
-                f'{_base_url()}/api/agent/client-history',
-                params={'phone': phone},
-                headers=_headers(),
-                timeout=5
-            )
-            data_cliente = r.json()
-            if data_cliente.get('exists'):
-                citas          = data_cliente.get('appointments', [])
-                ultimo_servicio = citas[0]['service'] if citas else None
-                ctx = (
-                    f"[CTX:CLIENTE_CONOCIDO] "
-                    f"Nombre: {data_cliente['full_name']} | "
-                    f"Último servicio: {ultimo_servicio or 'ninguno'} | "
-                    f"Salúdala por su nombre y pregunta en qué le puedes ayudar."
-                )
-                _guardar_mensaje(phone, 'user', ctx)
-                historial = _cargar_historial(phone)
-        except Exception as e:
-            logger.error(f"Error historial cliente {phone}: {e}")
-
-    # ── Selección de categoría vía botón interactivo ─────────────────────────
-    # Los botones devuelven el ID exacto: 'cat_facial', 'cat_corporal', etc.
+    # ── Selección de categoría ───────────────────────────────────────────────
     MAPA_CAT = {
         'cat_facial':       'facial',
         'cat_corporal':     'corporal',
@@ -705,13 +676,12 @@ def procesar_mensaje(numero: str, mensaje: str) -> str:
         _guardar_estado(phone, selected_category=categoria, current_step='eligiendo_servicio')
         _guardar_mensaje(phone, 'user', f"[Categoría elegida: {categoria}]")
         _enviar_menu_servicios(phone, categoria, servicios_cat)
-        return ''  # Ya se envió como lista interactiva
+        return ''
 
-    # ── Selección de servicio vía lista interactiva ──────────────────────────
-    # Las listas devuelven el ID: 'svc_3', 'svc_12', etc.
+    # ── Selección de servicio ────────────────────────────────────────────────
     if mensaje_lower.startswith('svc_') and not estado.get('selected_service_id'):
         try:
-            svc_id  = int(mensaje_lower.replace('svc_', ''))
+            svc_id   = int(mensaje_lower.replace('svc_', ''))
             servicio = next((s for s in servicios_raw if s['id'] == svc_id), None)
             if servicio:
                 _guardar_estado(phone,
@@ -720,44 +690,72 @@ def procesar_mensaje(numero: str, mensaje: str) -> str:
                                 selected_service_price=float(servicio['price']),
                                 selected_service_duration=servicio['duration_minutes'],
                                 current_step='confirmando_servicio')
-                ctx_svc = (
+                _guardar_mensaje(phone, 'user', (
                     f"[CTX:SERVICIO_SELECCIONADO] "
                     f"Nombre: {servicio['name']} | ID: {servicio['id']} | "
                     f"Precio: ${float(servicio['price']):,.0f} | "
                     f"Duración: {servicio['duration_minutes']}min"
-                )
-                _guardar_mensaje(phone, 'user', ctx_svc)
+                ))
                 _enviar_confirmacion_servicio(phone, servicio)
-                return ''  # Ya se envió como botones
+                return ''
         except Exception as e:
             logger.error(f"Error seleccionando servicio {mensaje}: {e}")
 
-    # ── Confirmación de servicio vía botón ───────────────────────────────────
+    # ── Confirmación/cancelación de servicio ─────────────────────────────────
+    if mensaje_lower == 'cancelar_servicio':
+        _limpiar_estado(phone)
+        _limpiar_historial(phone)
+        # Saluda de nuevo y muestra categorías
+        from infrastructure.web.whatsapp_sender import enviar_mensaje
+        enviar_mensaje(phone, "¡Sin problema! 😊 Volvamos a empezar 🌸")
+        _enviar_menu_categorias(phone)
+        return ''
+
     if mensaje_lower == 'confirmar_servicio':
         _guardar_estado(phone, current_step='recolectando_datos')
         _guardar_mensaje(phone, 'user', '[Cliente confirmó el servicio]')
         historial = _cargar_historial(phone)
-        # Continúa al LLM para que pida el primer dato
+        # Cae al LLM para que pida el primer dato
 
-    elif mensaje_lower == 'cancelar_servicio':
-        _limpiar_estado(phone)
-        _limpiar_historial(phone)
-        _enviar_menu_categorias(phone)
-        return ''
-
-    # ── Selección de horario vía lista interactiva ────────────────────────────
-    # Las listas de horario devuelven: 'hora_0800', 'hora_1400', etc.
+    # ── Selección de horario ──────────────────────────────────────────────────
     if mensaje_lower.startswith('hora_') and estado.get('pending_date'):
-        hora_str  = mensaje_lower.replace('hora_', '')  # '0800'
-        hora_fmt  = f"{hora_str[:2]}:{hora_str[2:]}"    # '08:00'
-        fecha_dt  = f"{estado['pending_date']}T{hora_fmt}:00"
-        ctx_hora  = f"[CTX:HORARIO_ELEGIDO] Fecha y hora: {fecha_dt}"
-        _guardar_mensaje(phone, 'user', ctx_hora)
+        hora_str = mensaje_lower.replace('hora_', '')
+        hora_fmt = f"{hora_str[:2]}:{hora_str[2:]}"
+        fecha_dt = f"{estado['pending_date']}T{hora_fmt}:00"
+        _guardar_mensaje(phone, 'user', f"[CTX:HORARIO_ELEGIDO] Fecha y hora: {fecha_dt}")
         _guardar_estado(phone, pending_date=None, current_step='resumen')
         historial = _cargar_historial(phone)
-        # Continúa al LLM para que muestre el resumen
+        # Cae al LLM para el resumen
 
-    # ── Flujo LLM ────────────────────────────────────────────────────────────
+    # ── NUEVO: Si no hay servicio confirmado aún, saluda y muestra categorías ─
+    if not estado.get('selected_service_id') or estado.get('current_step') == 'eligiendo_servicio':
+        es_primer_mensaje = len(historial) == 0
+        
+        # Verificar si es cliente conocido
+        saludo = "¡Hola! 😊 Bienvenida a Seremyc Sthetic 💜\n\n¿Qué tipo de servicio te interesa hoy?"
+        try:
+            r = requests.get(
+                f'{_base_url()}/api/agent/client-history',
+                params={'phone': phone},
+                headers=_headers(),
+                timeout=5
+            )
+            data_cliente = r.json()
+            if data_cliente.get('exists'):
+                nombre = data_cliente['full_name'].split()[0]
+                saludo = f"¡Hola {nombre}! 😊 Qué gusto verte de nuevo 💜\n\n¿Qué te gustaría agendar hoy?"
+        except Exception:
+            pass
+
+        if es_primer_mensaje or mensaje_lower not in MAPA_CAT:
+            from infrastructure.web.whatsapp_sender import enviar_mensaje
+            _guardar_mensaje(phone, 'user', mensaje)
+            _guardar_mensaje(phone, 'assistant', saludo)
+            enviar_mensaje(phone, saludo)
+            _enviar_menu_categorias(phone)
+            return ''
+
+    # ── Flujo LLM — solo para recolección de datos y agendamiento ────────────
     system = _construir_system(servicios_raw)
 
     if estado.get('selected_service_id'):
@@ -785,7 +783,7 @@ def procesar_mensaje(numero: str, mensaje: str) -> str:
 
     if 'CONSULTAR_DISPONIBILIDAD:' in texto_respuesta:
         _manejar_consulta_disponibilidad(phone, texto_respuesta)
-        return ''  # Ya se envió como lista interactiva
+        return ''
 
     if 'AGENDAR_CITA:' in texto_respuesta:
         resultado = _agendar_cita(phone, texto_respuesta)
