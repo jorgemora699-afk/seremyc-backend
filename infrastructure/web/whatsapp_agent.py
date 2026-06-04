@@ -364,7 +364,7 @@ def _enviar_menu_horarios(phone: str, fecha: str, slots: list[str]) -> None:
             'title':       h,
             'description': _fecha_legible(fecha)
         }
-        for h in slots
+        for h in slots[:10]
     ]
     enviar_lista(
         phone,
