@@ -503,10 +503,10 @@ def _parece_formulario(texto: str) -> bool:
 
 def _agendar_cita(phone: str, estado: dict, datos: dict) -> str:
     try:
+        fecha_cita = estado['pending_datetime']
+
         if isinstance(fecha_cita, datetime):
             fecha_cita = fecha_cita.isoformat()
-        else:
-            fecha_cita = fecha_cita
 
         if not _verificar_disponibilidad(fecha_cita):
             dt    = datetime.fromisoformat(fecha_cita)
