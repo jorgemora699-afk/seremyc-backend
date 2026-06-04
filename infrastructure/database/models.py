@@ -172,8 +172,14 @@ class ConversationStateModel(db.Model):
     selected_service_duration= db.Column(db.Integer)
     selected_category        = db.Column(db.String(50))
     pending_date             = db.Column(db.String(20))
-    updated_at               = db.Column(db.DateTime, default=datetime.utcnow,
-                                         onupdate=datetime.utcnow)
+    pending_datetime         = db.Column(db.DateTime)
+    collected_data           = db.Column(db.JSON)
+
+    updated_at = db.Column(
+        db.DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow
+    )
     
 class PushTokenModel(db.Model):
     __tablename__ = 'push_tokens'

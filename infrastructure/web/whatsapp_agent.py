@@ -724,15 +724,11 @@ def procesar_mensaje(numero: str, mensaje: str) -> str:
             datos = _extraer_datos_formulario(mensaje)
             if datos:
                 # Guardar datos en el estado
-                _guardar_estado(phone,
-                                collected_name=datos.get('nombre', ''),
-                                collected_email=datos.get('correo', ''),
-                                collected_birth_date=datos.get('nacimiento', ''),
-                                collected_address=datos.get('direccion', ''),
-                                collected_skin_type=datos.get('tipo_piel', ''),
-                                collected_allergies=datos.get('alergias', ''),
-                                collected_observations=datos.get('observaciones', ''),
-                                current_step='confirmando_cita')
+                _guardar_estado(
+                    phone,
+                    collected_data=json.dumps(datos),
+                    current_step='confirmando_cita'
+                )
                 estado_actualizado = _cargar_estado(phone)
                 _enviar_confirmacion_final(phone, estado_actualizado, datos)
                 return ''
@@ -759,15 +755,9 @@ def procesar_mensaje(numero: str, mensaje: str) -> str:
     # ══════════════════════════════════════════════════════════════════════════
     if paso_actual == 'confirmando_cita':
         if mensaje_lower == 'agendar_confirmar':
-            datos = {
-                'nombre':        estado.get('collected_name', ''),
-                'correo':        estado.get('collected_email', ''),
-                'nacimiento':    estado.get('collected_birth_date', ''),
-                'direccion':     estado.get('collected_address', ''),
-                'tipo_piel':     estado.get('collected_skin_type', ''),
-                'alergias':      estado.get('collected_allergies', ''),
-                'observaciones': estado.get('collected_observations', ''),
-            }
+            datos = json.loads(
+                estado.get('collected_data', '{}')
+            )
             return _agendar_cita(phone, estado, datos)
 
         if mensaje_lower == 'agendar_cancelar':
