@@ -193,7 +193,10 @@ def _slots_disponibles(fecha: str) -> list[str]:
 
 def _verificar_disponibilidad(fecha_cita: str) -> bool:
     try:
-        dt    = datetime.fromisoformat(fecha_cita)
+        if isinstance(fecha_cita, datetime):
+            dt = fecha_cita
+        else:
+            dt = datetime.fromisoformat(fecha_cita)
         slots = _slots_disponibles(dt.strftime('%Y-%m-%d'))
         return dt.strftime('%H:00') in slots
     except Exception as e:
@@ -394,7 +397,10 @@ def _enviar_confirmacion_final(phone: str, estado: dict, datos: dict) -> None:
     from infrastructure.web.whatsapp_sender import enviar_botones
 
     try:
-        dt    = datetime.fromisoformat(estado['pending_datetime'])
+        dt = estado['pending_datetime']
+
+        if isinstance(dt, str):
+            dt = datetime.fromisoformat(dt)
         dias  = ['lunes','martes','miércoles','jueves','viernes','sábado','domingo']
         meses = ['enero','febrero','marzo','abril','mayo','junio',
                  'julio','agosto','septiembre','octubre','noviembre','diciembre']
@@ -497,7 +503,10 @@ def _parece_formulario(texto: str) -> bool:
 
 def _agendar_cita(phone: str, estado: dict, datos: dict) -> str:
     try:
-        fecha_cita = estado['pending_datetime']
+        if isinstance(fecha_cita, datetime):
+            fecha_cita = fecha_cita.isoformat()
+        else:
+            fecha_cita = fecha_cita
 
         if not _verificar_disponibilidad(fecha_cita):
             dt    = datetime.fromisoformat(fecha_cita)
