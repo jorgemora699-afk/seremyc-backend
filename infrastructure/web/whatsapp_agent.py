@@ -252,9 +252,18 @@ def _parsear_fecha_natural(texto: str) -> str | None:
                     pass
 
     # Intentar parsear formato DD/MM/YYYY o YYYY-MM-DD
-    for fmt in ('%d/%m/%Y', '%Y-%m-%d', '%d-%m-%Y'):
+    for fmt in (
+        '%d/%m/%Y',
+        '%d-%m-%Y',
+        '%d/%m/%y',
+        '%d-%m-%y',
+        '%Y-%m-%d'
+    ):
         try:
-            return datetime.strptime(texto.strip(), fmt).strftime('%Y-%m-%d')
+            return datetime.strptime(
+                texto.strip(),
+                fmt
+            ).strftime('%Y-%m-%d')
         except ValueError:
             continue
 
@@ -338,15 +347,52 @@ def _enviar_confirmacion_servicio(phone: str, servicio: dict) -> None:
     )
 
 
-def _enviar_solicitud_fecha(phone: str) -> None:
-    from infrastructure.web.whatsapp_sender import enviar_mensaje
-    enviar_mensaje(
+
+def _enviar_menu_fechas(phone: str) -> None:
+    from infrastructure.web.whatsapp_sender import enviar_lista
+    from datetime import datetime, timedelta
+
+    rows = []
+
+    hoy = datetime.now().date()
+    dias = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom']
+
+    fecha = hoy
+    encontrados = 0
+
+    while encontrados < 10:
+        fecha_str = fecha.strftime('%Y-%m-%d')
+
+        slots = _slots_disponibles(fecha_str)
+
+        if slots:  # Solo mostrar fechas con disponibilidad
+            rows.append({
+                "id": f"fecha_{fecha_str}",
+                "title": f"{dias[fecha.weekday()]} {fecha.day}",
+                "description": fecha.strftime("%d/%m/%Y")
+            })
+
+            encontrados += 1
+
+        fecha += timedelta(days=1)
+
+    enviar_lista(
         phone,
-        "📅 ¿Qué día te gustaría venir?\n\n"
-        "Puedes escribir por ejemplo:\n"
-        "• _mañana_\n"
-        "• _el viernes_\n"
-        "• _6 de junio_"
+        texto=(
+            "📅 *Selecciona una fecha disponible*\n\n"
+            "También puedes escribir una fecha manualmente.\n"
+            "Ejemplos:\n"
+            "• 18 de junio\n"
+            "• 18/06/2026\n"
+            "• 18-06-2026"
+        ),
+        boton_label="Ver fechas",
+        secciones=[
+            {
+                "title": "Próximas fechas disponibles",
+                "rows": rows
+            }
+        ]
     )
 
 
@@ -359,7 +405,7 @@ def _enviar_menu_horarios(phone: str, fecha: str, slots: list[str]) -> None:
             f"¿Te gustaría elegir otro día? 🗓"
         )
         _guardar_estado(phone, pending_date=None, current_step='eligiendo_fecha')
-        _enviar_solicitud_fecha(phone)
+        _enviar_menu_fechas(phone)
         return
     rows = [
         {
@@ -691,7 +737,7 @@ def procesar_mensaje(numero: str, mensaje: str) -> str:
     if paso_actual == 'confirmando_servicio':
         if mensaje_lower == 'confirmar_servicio':
             _guardar_estado(phone, current_step='eligiendo_fecha')
-            _enviar_solicitud_fecha(phone)
+            _enviar_menu_fechas(phone)
             return ''
 
         if mensaje_lower == 'cancelar_servicio':
@@ -705,20 +751,54 @@ def procesar_mensaje(numero: str, mensaje: str) -> str:
     # PASO 5 — SELECCIÓN DE FECHA
     # ══════════════════════════════════════════════════════════════════════════
     if paso_actual == 'eligiendo_fecha':
-        fecha = _parsear_fecha_natural(mensaje)
-        if fecha:
+
+        # Fecha seleccionada desde lista
+        if mensaje_lower.startswith('fecha_'):
+
+            fecha = mensaje_lower.replace('fecha_', '')
+
             slots = _slots_disponibles(fecha)
-            _guardar_estado(phone, pending_date=fecha, current_step='eligiendo_horario')
-            _enviar_menu_horarios(phone, fecha, slots)
-            return ''
-        else:
-            from infrastructure.web.whatsapp_sender import enviar_mensaje
-            enviar_mensaje(
+
+            _guardar_estado(
                 phone,
-                "No entendí la fecha 😔 ¿Puedes escribirla así?\n\n"
-                "• _mañana_\n• _el viernes_\n• _6 de junio_"
+                pending_date=fecha,
+                current_step='eligiendo_horario'
             )
+
+            _enviar_menu_horarios(phone, fecha, slots)
+
             return ''
+
+        # Fecha escrita manualmente
+        fecha = _parsear_fecha_natural(mensaje)
+
+        if fecha:
+
+            slots = _slots_disponibles(fecha)
+
+            _guardar_estado(
+                phone,
+                pending_date=fecha,
+                current_step='eligiendo_horario'
+            )
+
+            _enviar_menu_horarios(phone, fecha, slots)
+
+            return ''
+
+        from infrastructure.web.whatsapp_sender import enviar_mensaje
+
+        enviar_mensaje(
+            phone,
+            "😔 No entendí la fecha.\n\n"
+            "Puedes seleccionarla desde la lista o escribirla así:\n"
+            "• 18 de junio\n"
+            "• 18/06/2026"
+        )
+
+        _enviar_menu_fechas(phone)
+
+        return ''
 
     # ══════════════════════════════════════════════════════════════════════════
     # PASO 6 — SELECCIÓN DE HORARIO
@@ -742,9 +822,10 @@ def procesar_mensaje(numero: str, mensaje: str) -> str:
         datos = _extraer_datos_formulario(mensaje)
 
         if datos:
+
             _guardar_estado(
                 phone,
-                collected_data=datos,
+                collected_data=json.dumps(datos),
                 current_step='confirmando_cita'
             )
 
@@ -758,44 +839,63 @@ def procesar_mensaje(numero: str, mensaje: str) -> str:
 
             return ''
 
-    from infrastructure.web.whatsapp_sender import enviar_mensaje
+        from infrastructure.web.whatsapp_sender import enviar_mensaje
 
-    enviar_mensaje(
-        phone,
-        "😔 No pude identificar correctamente tus datos.\n\n"
-        "Por favor envíame:\n"
-        "• Nombre\n"
-        "• Correo\n"
-        "• Fecha de nacimiento\n"
-        "• Dirección"
-    )
+        enviar_mensaje(
+            phone,
+            "😔 No pude identificar correctamente tus datos.\n\n"
+            "Por favor envíame:\n"
+            "• Nombre\n"
+            "• Correo\n"
+            "• Fecha de nacimiento\n"
+            "• Dirección"
+        )
 
-    return ''
+        return ''
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # PASO 8 — CONFIRMACIÓN FINAL
-    # ══════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════
+# PASO 8 — CONFIRMACIÓN FINAL
+# ══════════════════════════════════════════════════════════════════════════
     if paso_actual == 'confirmando_cita':
+
         if mensaje_lower == 'agendar_confirmar':
-            datos = estado.get('collected_data', {})
+
+            datos = estado.get('collected_data', '{}')
+
+            if isinstance(datos, str):
+                datos = json.loads(datos)
+
             return _agendar_cita(phone, estado, datos)
 
         if mensaje_lower == 'agendar_cancelar':
+
             _limpiar_estado(phone)
             _limpiar_historial(phone)
+
             from infrastructure.web.whatsapp_sender import enviar_mensaje
-            enviar_mensaje(phone, "Entendido 😊 Cuando quieras agendar, aquí estaré 🌸")
+
+            enviar_mensaje(
+                phone,
+                "Entendido 😊 Cuando quieras agendar, aquí estaré 🌸"
+            )
+
             return ''
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # FALLBACK — mensaje fuera de flujo
-    # ══════════════════════════════════════════════════════════════════════════
+
+    # FALLBACK
     from infrastructure.web.whatsapp_sender import enviar_mensaje
+
     enviar_mensaje(
         phone,
         "¡Hola! 😊 Soy Sere, asistente de Seremyc Sthetic 💜\n"
         "¿En qué puedo ayudarte hoy?"
     )
-    _guardar_estado(phone, current_step='eligiendo_categoria')
+
+    _guardar_estado(
+        phone,
+        current_step='eligiendo_categoria'
+    )
+
     _enviar_menu_categorias(phone)
+
     return ''
