@@ -439,19 +439,28 @@ def _enviar_confirmacion_final(phone: str, estado: dict, datos: dict) -> None:
 # EXTRACCIÓN DE DATOS DEL FORMULARIO (único uso del LLM en el flujo)
 # ══════════════════════════════════════════════════════════════════════════════
 
-SYSTEM_EXTRACTOR = """Eres un extractor de datos. El usuario envió un formulario con sus datos personales.
-Extrae exactamente los campos y devuelve SOLO un JSON válido, sin texto adicional, sin markdown.
+SYSTEM_EXTRACTOR = """Eres un extractor de datos.
 
-Formato esperado:
+El usuario puede enviar la información:
+
+- Como formulario.
+- Como texto libre.
+- En cualquier orden.
+- Con o sin etiquetas.
+
+Debes identificar los siguientes campos:
+
 {
-  "nombre": "...",
-  "correo": "...",
-  "nacimiento": "DD/MM/YYYY",
-  "direccion": "...",
-  "tipo_piel": "...",
-  "alergias": "...",
-  "observaciones": "..."
+  "nombre": "",
+  "correo": "",
+  "nacimiento": "",
+  "direccion": "",
+  "tipo_piel": "",
+  "alergias": "",
+  "observaciones": ""
 }
+
+Devuelve SOLO JSON válido.
 
 Reglas:
 - Copia los valores EXACTAMENTE como los escribió el usuario, sin corregir ni cambiar nada.
@@ -729,35 +738,39 @@ def procesar_mensaje(numero: str, mensaje: str) -> str:
     # PASO 7 — FORMULARIO DE DATOS PERSONALES
     # ══════════════════════════════════════════════════════════════════════════
     if paso_actual == 'llenando_datos':
-        if _parece_formulario(mensaje):
-            datos = _extraer_datos_formulario(mensaje)
-            if datos:
-                # Guardar datos en el estado
-                _guardar_estado(
-                    phone,
-                    collected_data=json.dumps(datos),
-                    current_step='confirmando_cita'
-                )
-                estado_actualizado = _cargar_estado(phone)
-                _enviar_confirmacion_final(phone, estado_actualizado, datos)
-                return ''
-            else:
-                from infrastructure.web.whatsapp_sender import enviar_mensaje
-                enviar_mensaje(
-                    phone,
-                    "No pude leer tus datos 😔 Por favor asegúrate de incluir al menos Nombre y Correo."
-                )
-                _enviar_formulario_datos(phone)
-                return ''
-        else:
-            # El cliente escribió algo que no es el formulario
-            from infrastructure.web.whatsapp_sender import enviar_mensaje
-            enviar_mensaje(
+
+        datos = _extraer_datos_formulario(mensaje)
+
+        if datos:
+            _guardar_estado(
                 phone,
-                "Por favor completa el formulario con tus datos 😊\nRecuerda incluir todos los campos:"
+                collected_data=datos,
+                current_step='confirmando_cita'
             )
-            _enviar_formulario_datos(phone)
+
+            estado_actualizado = _cargar_estado(phone)
+
+            _enviar_confirmacion_final(
+                phone,
+                estado_actualizado,
+                datos
+            )
+
             return ''
+
+    from infrastructure.web.whatsapp_sender import enviar_mensaje
+
+    enviar_mensaje(
+        phone,
+        "😔 No pude identificar correctamente tus datos.\n\n"
+        "Por favor envíame:\n"
+        "• Nombre\n"
+        "• Correo\n"
+        "• Fecha de nacimiento\n"
+        "• Dirección"
+    )
+
+    return ''
 
     # ══════════════════════════════════════════════════════════════════════════
     # PASO 8 — CONFIRMACIÓN FINAL
