@@ -61,7 +61,16 @@ def create_client():
             return jsonify({'error': 'Nombre y teléfono son requeridos'}), 400
 
         if data.get('birth_date'):
-            data['birth_date'] = datetime.strptime(data['birth_date'], '%Y-%m-%d').date()
+            try:
+                data['birth_date'] = datetime.strptime(
+                    data['birth_date'],
+                    '%Y-%m-%d'
+                ).date()
+            except ValueError:
+                data['birth_date'] = datetime.strptime(
+                    data['birth_date'],
+                    '%d/%m/%Y'
+                ).date()
 
         use_case = CreateClientUseCase()
         client = use_case.execute(data)
