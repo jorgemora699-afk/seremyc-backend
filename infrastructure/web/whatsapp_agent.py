@@ -755,9 +755,7 @@ def procesar_mensaje(numero: str, mensaje: str) -> str:
     # ══════════════════════════════════════════════════════════════════════════
     if paso_actual == 'confirmando_cita':
         if mensaje_lower == 'agendar_confirmar':
-            datos = json.loads(
-                estado.get('collected_data', '{}')
-            )
+            datos = estado.get('collected_data', {})
             return _agendar_cita(phone, estado, datos)
 
         if mensaje_lower == 'agendar_cancelar':
