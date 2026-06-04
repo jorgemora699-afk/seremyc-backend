@@ -136,7 +136,8 @@ def _handle_meta():
                 pass
             _enviar_push_notification(nombre)
 
-        enviar_mensaje(numero_cliente, respuesta_texto)
+        if respuesta_texto:
+            enviar_mensaje(numero_cliente, respuesta_texto)
 
     except (KeyError, IndexError) as e:
         logger.error(f"Error procesando webhook Meta: {e}")
