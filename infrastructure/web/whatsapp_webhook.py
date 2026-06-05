@@ -204,17 +204,7 @@ def _enviar_push_notification(nombre_cliente: str) -> None:
         logger.error(f"Error enviando push notification: {e}")
 
 def _manejar_asesor_webhook(phone: str) -> str:
-    numero_asesor = os.getenv('ASESOR_WHATSAPP', '')
-    if numero_asesor:
-        return (
-            f"¡Claro! 😊 Te conecto con una de nuestras asesoras ahora mismo.\n\n"
-            f"📲 También puedes escribirnos aquí: wa.me/{numero_asesor}\n\n"
-            f"En breve alguien de nuestro equipo te atenderá 💜"
-        )
-    return (
-        f"¡Claro! 😊 Te voy a conectar con una de nuestras asesoras.\n\n"
-        f"En breve alguien de nuestro equipo te atenderá personalmente 💜"
-    )
+    return "¡Por supuesto! 😊 Una de nuestras asesoras te atenderá pronto 💜"
 
 # ─────────────────────────────────────────
 # Verificación GET para Meta

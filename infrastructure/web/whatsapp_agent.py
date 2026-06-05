@@ -638,14 +638,7 @@ def _agendar_cita(phone: str, estado: dict, datos: dict) -> str:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _manejar_asesor(numero: str) -> str:
-    numero_asesor = os.getenv('ASESOR_WHATSAPP', '')
-    if numero_asesor:
-        return (
-            f"¡Claro! 😊 Te conecto con una de nuestras asesoras.\n\n"
-            f"📲 Escríbenos: wa.me/{numero_asesor}\n\n"
-            f"También puedo seguir ayudándote por aquí 💜"
-        )
-    return "¡Por supuesto! 😊 Una de nuestras asesoras te atenderá pronto 💜"
+    return 'CONTACTAR_ASESOR'
 
 
 # ══════════════════════════════════════════════════════════════════════════════
