@@ -80,6 +80,23 @@ def create_finance():
     except Exception as e:
         return jsonify({'error': 'Error interno del servidor'}), 500
     
+@finance_bp.route('/<int:finance_id>', methods=['DELETE'])
+@jwt_required()
+def delete_finance(finance_id):
+    try:
+        from infrastructure.repositories.finance_repository import FinanceRepository
+        repo = FinanceRepository()
+        finance = repo.find_by_id(finance_id)
+
+        if not finance:
+            return jsonify({'error': 'Registro no encontrado'}), 404
+
+        repo.delete(finance)
+        return jsonify({'message': 'Registro eliminado exitosamente'}), 200
+
+    except Exception as e:
+        return jsonify({'error': 'Error interno del servidor'}), 500    
+    
 @finance_bp.route('/annual', methods=['GET'])
 @jwt_required()
 def get_annual():

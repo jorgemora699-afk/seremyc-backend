@@ -79,10 +79,13 @@ def get_dashboard():
             ServiceModel.name,
             func.count(AppointmentModel.id).label('total')
         ).join(AppointmentModel, AppointmentModel.service_id == ServiceModel.id)\
-         .filter(AppointmentModel.status == 'finished')\
-         .group_by(ServiceModel.name)\
-         .order_by(func.count(AppointmentModel.id).desc())\
-         .limit(5).all()
+        .filter(
+            AppointmentModel.status.in_(['confirmed', 'finished', 'in_progress']),
+            ServiceModel.is_active == True
+        )\
+        .group_by(ServiceModel.name)\
+        .order_by(func.count(AppointmentModel.id).desc())\
+        .limit(5).all()
 
         # ─── Citas por estado hoy ───────────────────────────────────
         statuses = ['pending', 'confirmed', 'in_progress', 'finished', 'cancelled', 'no_show']
