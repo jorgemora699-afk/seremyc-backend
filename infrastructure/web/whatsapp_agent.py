@@ -689,9 +689,14 @@ def procesar_mensaje(numero: str, mensaje: str) -> str:
             pass
 
         saludo = (
-            f"¡Hola {nombre_saludo}! 😊 Bienvenida a Seremyc Sthetic 💜"
+            f"¡Hola {nombre_saludo}! 😊 Bienvenida a Seremyc Sthetic 💜\n\n"
+            f"Soy Sere, tu asistente virtual 🌸\n"
+            f"_(Si en algún momento prefieres hablar con una asesora, solo escribe asesor)_"
             if nombre_saludo
-            else "¡Hola! 😊 Bienvenida a Seremyc Sthetic 💜\nSoy Sere, tu asistente virtual 🌸"
+            else
+            f"¡Hola! 😊 Bienvenida a Seremyc Sthetic 💜\n\n"
+            f"Soy Sere, tu asistente virtual 🌸\n"
+            f"_(Si en algún momento prefieres hablar con una asesora, solo escribe asesor)_"
         )
 
         from infrastructure.web.whatsapp_sender import enviar_mensaje
@@ -853,33 +858,25 @@ def procesar_mensaje(numero: str, mensaje: str) -> str:
 
         return ''
 
-# ══════════════════════════════════════════════════════════════════════════
-# PASO 8 — CONFIRMACIÓN FINAL
-# ══════════════════════════════════════════════════════════════════════════
+    # ══════════════════════════════════════════════════════════════════════════
+    # PASO 8 — CONFIRMACIÓN FINAL
+    # ══════════════════════════════════════════════════════════════════════════
     if paso_actual == 'confirmando_cita':
 
         if mensaje_lower == 'agendar_confirmar':
-
             datos = estado.get('collected_data', '{}')
-
             if isinstance(datos, str):
                 datos = json.loads(datos)
-
             return _agendar_cita(phone, estado, datos)
 
         if mensaje_lower == 'agendar_cancelar':
-
             _limpiar_estado(phone)
             _limpiar_historial(phone)
-
             from infrastructure.web.whatsapp_sender import enviar_mensaje
-
-            enviar_mensaje(
-                phone,
-                "Entendido 😊 Cuando quieras agendar, aquí estaré 🌸"
-            )
-
+            enviar_mensaje(phone, "Entendido 😊 Cuando quieras agendar, aquí estaré 🌸")
             return ''
+
+        return ''
 
 
     # FALLBACK
